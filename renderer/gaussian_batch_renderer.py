@@ -22,6 +22,11 @@ class GaussianBatchRenderer:
             w2c, proj, cam_p = get_cam_info_gaussian(
                 c2w=batch["c2w"][batch_idx], fovx=fovy, fovy=fovy, znear=0.1, zfar=100
             )
+            
+            if batch.__contains__("timestamp"):
+                timestamp = batch["timestamp"][batch_idx]
+            else:
+                timestamp = None
 
             # import pdb; pdb.set_trace()
             viewpoint_cam = Camera(
@@ -32,6 +37,7 @@ class GaussianBatchRenderer:
                 world_view_transform=w2c,
                 full_proj_transform=proj,
                 camera_center=cam_p,
+                timestamp=timestamp
             )
 
             with autocast(enabled=False):

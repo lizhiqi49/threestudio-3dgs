@@ -180,6 +180,7 @@ class Camera(NamedTuple):
     image_height: int
     world_view_transform: torch.Tensor
     full_proj_transform: torch.Tensor
+    timestamp: torch.Tensor = None
 
 
 @threestudio.register("gaussian-splatting")

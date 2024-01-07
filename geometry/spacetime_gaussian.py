@@ -79,8 +79,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
     def get_trbfscale(self):
         return self._trbf_scale
     
-    @property
-    def get_features(self):
+    def get_features(self, delta_t):
         return self._features_dc
     
     def oneupSHdegree(self):
@@ -91,7 +90,8 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
         # TODO: whether use RGB2SH here?
-        fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
+        # fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
+        fused_color = torch.tensor(np.asarray(pcd.colors)).float().cuda()   # RGB
         # features = (
         #     torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2))
         #     .float()
