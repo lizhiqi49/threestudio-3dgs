@@ -14,12 +14,13 @@ else:
 
 
 from .background import gaussian_mvdream_background
-from .geometry import exporter, gaussian_base, gaussian_io
+from .geometry import exporter, gaussian_base, gaussian_io, spacetime_gaussian
 from .material import gaussian_material
 from .renderer import (
     diff_gaussian_rasterizer,
     diff_gaussian_rasterizer_advanced,
     diff_gaussian_rasterizer_background,
     diff_gaussian_rasterizer_shading,
+    diff_gaussian_rasterizer_st,
 )
 from .system import gaussian_mvdream, gaussian_splatting, gaussian_zero123
