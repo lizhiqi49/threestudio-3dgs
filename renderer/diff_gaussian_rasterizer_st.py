@@ -16,7 +16,7 @@ from threestudio.models.renderers.base import Rasterizer
 from threestudio.utils.typing import *
 
 from .gaussian_batch_renderer import GaussianBatchRenderer
-from ..geometry.spacetime_gaussian import TemporalCamera, SpacetimeGaussianModel
+from ..geometry.spacetime_gaussian import SpacetimeGaussianModel
 
 
 def basicfunction(x):
