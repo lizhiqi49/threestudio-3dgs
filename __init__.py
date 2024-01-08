@@ -24,3 +24,4 @@ from .renderer import (
     diff_gaussian_rasterizer_st,
 )
 from .system import gaussian_mvdream, gaussian_splatting, gaussian_zero123, gaussian_4dgen
+from .data import temporal_image
