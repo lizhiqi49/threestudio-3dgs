@@ -35,11 +35,26 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         addsphpointsscale: float = 0.8
         trbfslinit: float = 0.1
         raystart: float = 0.7
+        spatial_lr_scale: float = 10.0
         
     cfg: Config
     
     def configure(self) -> None:
-        super().configure()
+        self.active_sh_degree = 0
+        self.max_sh_degree = self.cfg.sh_degree
+        self._xyz = torch.empty(0)
+        self._features_dc = torch.empty(0)
+        self._features_rest = torch.empty(0)
+        self._scaling = torch.empty(0)
+        self._rotation = torch.empty(0)
+        self._opacity = torch.empty(0)
+        self.max_radii2D = torch.empty(0)
+        self.xyz_gradient_accum = torch.empty(0)
+        self.denom = torch.empty(0)
+        if self.cfg.pred_normal:
+            self._normal = torch.empty(0)
+        self.optimizer = None
+        self.setup_functions()
         
         # Add temporal parameters
         self._motion = torch.empty(0)
@@ -57,13 +72,109 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         self.preprocesspoints = False 
         self.addsphpointsscale = self.cfg.addsphpointsscale
 
-        
         self.maxz, self.minz =  0.0 , 0.0 
         self.maxy, self.miny =  0.0 , 0.0 
         self.maxx, self.minx =  0.0 , 0.0  
         self.computedtrbfscale = None
         self.computedopacity = None
         self.raystart = self.cfg.raystart
+
+        if self.cfg.geometry_convert_from.startswith("shap-e:"):
+            shap_e_guidance = threestudio.find("shap-e-guidance")(
+                self.cfg.shap_e_guidance_config
+            )
+            prompt = self.cfg.geometry_convert_from[len("shap-e:") :]
+            xyz, color = shap_e_guidance(prompt)
+
+            pcd = BasicPointCloud(
+                points=xyz, colors=color, normals=np.zeros((xyz.shape[0], 3))
+            )
+            self.create_from_pcd(pcd, self.cfg.spatial_lr_scale)
+            self.training_setup()
+
+        # Support Initialization from OpenLRM, Please see https://github.com/Adamdad/threestudio-lrm
+        elif self.cfg.geometry_convert_from.startswith("lrm:"):
+            lrm_guidance = threestudio.find("lrm-guidance")(
+                self.cfg.shap_e_guidance_config
+            )
+            prompt = self.cfg.geometry_convert_from[len("lrm:") :]
+            xyz, color = lrm_guidance(prompt)
+
+            pcd = BasicPointCloud(
+                points=xyz, colors=color, normals=np.zeros((xyz.shape[0], 3))
+            )
+            self.create_from_pcd(pcd, self.cfg.spatial_lr_scale)
+            self.training_setup()
+
+        elif os.path.exists(self.cfg.geometry_convert_from):
+            threestudio.info(
+                "Loading point cloud from %s" % self.cfg.geometry_convert_from
+            )
+            if self.cfg.geometry_convert_from.endswith(".ckpt"):
+                ckpt_dict = torch.load(self.cfg.geometry_convert_from)
+                num_pts = ckpt_dict["state_dict"]["geometry._xyz"].shape[0]
+                pcd = BasicPointCloud(
+                    points=np.zeros((num_pts, 3)),
+                    colors=np.zeros((num_pts, 3)),
+                    normals=np.zeros((num_pts, 3)),
+                )
+                self.create_from_pcd(pcd, self.cfg.spatial_lr_scale)
+                self.training_setup()
+                new_ckpt_dict = {}
+                for key in self.state_dict():
+                    if ckpt_dict["state_dict"].__contains__("geometry." + key):
+                        new_ckpt_dict[key] = ckpt_dict["state_dict"]["geometry." + key]
+                    else:
+                        new_ckpt_dict[key] = self.state_dict()[key]
+                self.load_state_dict(new_ckpt_dict)
+            elif self.cfg.geometry_convert_from.endswith(".ply"):
+                if self.cfg.load_ply_only_vertex:
+                    plydata = PlyData.read(self.cfg.geometry_convert_from)
+                    vertices = plydata["vertex"]
+                    positions = np.vstack(
+                        [vertices["x"], vertices["y"], vertices["z"]]
+                    ).T
+                    if vertices.__contains__("red"):
+                        colors = (
+                            np.vstack(
+                                [vertices["red"], vertices["green"], vertices["blue"]]
+                            ).T
+                            / 255.0
+                        )
+                    else:
+                        shs = np.random.random((positions.shape[0], 3)) / 255.0
+                        C0 = 0.28209479177387814
+                        colors = shs * C0 + 0.5
+                    normals = np.zeros_like(positions)
+                    pcd = BasicPointCloud(
+                        points=positions, colors=colors, normals=normals
+                    )
+                    self.create_from_pcd(pcd, self.cfg.spatial_lr_scale)
+                else:
+                    self.load_ply(self.cfg.geometry_convert_from)
+                self.training_setup()
+        else:
+            threestudio.info("Geometry not found, initilization with random points")
+            num_pts = self.cfg.init_num_pts
+            phis = np.random.random((num_pts,)) * 2 * np.pi
+            costheta = np.random.random((num_pts,)) * 2 - 1
+            thetas = np.arccos(costheta)
+            mu = np.random.random((num_pts,))
+            radius = self.cfg.pc_init_radius * np.cbrt(mu)
+            x = radius * np.sin(thetas) * np.cos(phis)
+            y = radius * np.sin(thetas) * np.sin(phis)
+            z = radius * np.cos(thetas)
+            xyz = np.stack((x, y, z), axis=1)
+
+            shs = np.random.random((num_pts, 3)) / 255.0
+            C0 = 0.28209479177387814
+            color = shs * C0 + 0.5
+            pcd = BasicPointCloud(
+                points=xyz, colors=color, normals=np.zeros((num_pts, 3))
+            )
+
+            self.create_from_pcd(pcd, 10)
+            self.training_setup()
         
         
     def get_rotation(self, delta_t):
