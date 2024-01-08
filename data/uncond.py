@@ -14,13 +14,7 @@ from threestudio import register
 from threestudio.utils.base import Updateable
 from threestudio.utils.config import parse_structured
 from threestudio.utils.misc import get_device
-from threestudio.utils.ops import (
-    get_full_projection_matrix,
-    get_mvp_matrix,
-    get_projection_matrix,
-    get_ray_directions,
-    get_rays,
-)
+
 from threestudio.utils.typing import *
 
 
@@ -56,7 +50,7 @@ class RandomCameraDataModuleConfig:
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
 
-    rays_d_normalize: bool = True
+    # rays_d_normalize: bool = True
 
 
 class RandomCameraIterableDataset(IterableDataset, Updateable):
@@ -90,14 +84,14 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
             assert len(self.heights) == len(self.cfg.resolution_milestones) + 1
             self.resolution_milestones = [-1] + self.cfg.resolution_milestones
 
-        self.directions_unit_focals = [
-            get_ray_directions(H=height, W=width, focal=1.0)
-            for (height, width) in zip(self.heights, self.widths)
-        ]
+        # self.directions_unit_focals = [
+        #     get_ray_directions(H=height, W=width, focal=1.0)
+        #     for (height, width) in zip(self.heights, self.widths)
+        # ]
         self.height: int = self.heights[0]
         self.width: int = self.widths[0]
         self.batch_size: int = self.batch_sizes[0]
-        self.directions_unit_focal = self.directions_unit_focals[0]
+        # self.directions_unit_focal = self.directions_unit_focals[0]
         self.elevation_range = self.cfg.elevation_range
         self.azimuth_range = self.cfg.azimuth_range
         self.camera_distance_range = self.cfg.camera_distance_range
@@ -108,7 +102,7 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
         self.height = self.heights[size_ind]
         self.width = self.widths[size_ind]
         self.batch_size = self.batch_sizes[size_ind]
-        self.directions_unit_focal = self.directions_unit_focals[size_ind]
+        # self.directions_unit_focal = self.directions_unit_focals[size_ind]
         threestudio.debug(
             f"Training height: {self.height}, width: {self.width}, batch_size: {self.batch_size}"
         )
@@ -307,30 +301,12 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
         )
         c2w[:, 3, 3] = 1.0
 
-        # get directions by dividing directions_unit_focal by focal length
-        focal_length: Float[Tensor, "B"] = 0.5 * self.height / torch.tan(0.5 * fovy)
-        directions: Float[Tensor, "B H W 3"] = self.directions_unit_focal[
-            None, :, :, :
-        ].repeat(self.batch_size, 1, 1, 1)
-        directions[:, :, :, :2] = (
-            directions[:, :, :, :2] / focal_length[:, None, None, None]
-        )
-
-        # Importance note: the returned rays_d MUST be normalized!
-        rays_o, rays_d = get_rays(
-            directions, c2w, keepdim=True, normalize=self.cfg.rays_d_normalize
-        )
-
-        self.proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
-            fovy, self.width / self.height, 0.01, 100.0
-        )  # FIXME: hard-coded near and far
-        mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, self.proj_mtx)
         self.fovy = fovy
 
         return {
-            "rays_o": rays_o,
-            "rays_d": rays_d,
-            "mvp_mtx": mvp_mtx,
+            # "rays_o": rays_o,
+            # "rays_d": rays_d,
+            # "mvp_mtx": mvp_mtx,
             "camera_positions": camera_positions,
             "c2w": c2w,
             "light_positions": light_positions,
@@ -340,7 +316,7 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
             "height": self.height,
             "width": self.width,
             "fovy": self.fovy,
-            "proj_mtx": self.proj_mtx,
+            # "proj_mtx": self.proj_mtx,
         }
 
 
@@ -408,30 +384,6 @@ class RandomCameraDataset(Dataset):
         )
         c2w[:, 3, 3] = 1.0
 
-        # get directions by dividing directions_unit_focal by focal length
-        focal_length: Float[Tensor, "B"] = (
-            0.5 * self.cfg.eval_height / torch.tan(0.5 * fovy)
-        )
-        directions_unit_focal = get_ray_directions(
-            H=self.cfg.eval_height, W=self.cfg.eval_width, focal=1.0
-        )
-        directions: Float[Tensor, "B H W 3"] = directions_unit_focal[
-            None, :, :, :
-        ].repeat(self.n_views, 1, 1, 1)
-        directions[:, :, :, :2] = (
-            directions[:, :, :, :2] / focal_length[:, None, None, None]
-        )
-
-        rays_o, rays_d = get_rays(
-            directions, c2w, keepdim=True, normalize=self.cfg.rays_d_normalize
-        )
-        self.proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
-            fovy, self.cfg.eval_width / self.cfg.eval_height, 0.01, 100.0
-        )  # FIXME: hard-coded near and far
-        mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, self.proj_mtx)
-
-        self.rays_o, self.rays_d = rays_o, rays_d
-        self.mvp_mtx = mvp_mtx
         self.c2w = c2w
         self.camera_positions = camera_positions
         self.light_positions = light_positions
@@ -446,9 +398,9 @@ class RandomCameraDataset(Dataset):
     def __getitem__(self, index):
         return {
             "index": index,
-            "rays_o": self.rays_o[index],
-            "rays_d": self.rays_d[index],
-            "mvp_mtx": self.mvp_mtx[index],
+            # "rays_o": self.rays_o[index],
+            # "rays_d": self.rays_d[index],
+            # "mvp_mtx": self.mvp_mtx[index],
             "c2w": self.c2w[index],
             "camera_positions": self.camera_positions[index],
             "light_positions": self.light_positions[index],
@@ -458,7 +410,7 @@ class RandomCameraDataset(Dataset):
             "height": self.cfg.eval_height,
             "width": self.cfg.eval_width,
             "fovy": self.fovy[index],
-            "proj_mtx": self.proj_mtx[index],
+            # "proj_mtx": self.proj_mtx[index],
         }
 
     def collate(self, batch):
@@ -467,7 +419,7 @@ class RandomCameraDataset(Dataset):
         return batch
 
 
-@register("random-camera-datamodule")
+@register("random-camera-gs-datamodule")
 class RandomCameraDataModule(pl.LightningDataModule):
     cfg: RandomCameraDataModuleConfig
 
