@@ -33,7 +33,7 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         guidance_zero123_type: str = "stale-zero123-guidance"
         guidance_zero123: dict = field(default_factory=dict)
-        
+
         prompt_processor_3d_type: Optional[str] = ""
         prompt_processor_3d: dict = field(default_factory=dict)
         guidance_3d_type: Optional[str] = "image-dream-guidance"
@@ -104,11 +104,11 @@ class Gaussian4DGen(BaseLift3DSystem):
             self.guidance_3d = threestudio.find(self.cfg.guidance_3d_type)(self.cfg.guidance_3d)
         else:
             self.guidance_3d = None
-        
+
         # Maybe use video diffusion models
         self.enable_vid = (
-            self.stage == "motion" 
-            and self.cfg.guidance_vid_type is not None 
+            self.stage == "motion"
+            and self.cfg.guidance_vid_type is not None
             and C(self.cfg.loss.lambda_sds_vid, 0, 0) > 0
         )
         if self.enable_vid:
@@ -275,6 +275,8 @@ class Gaussian4DGen(BaseLift3DSystem):
         )
         opt.step()
         opt.zero_grad(set_to_none=True)
+
+        ## TODO : add sugar regulation loss
 
         return {"loss": total_loss}
 
