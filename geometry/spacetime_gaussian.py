@@ -21,7 +21,7 @@ from .gaussian_base import (
     GaussianBaseModel, 
     BasicPointCloud, 
 )
-from .gaussian_base import RGB2SH, inverse_sigmoid, build_rotation
+from .gaussian_base import RGB2SH, inverse_sigmoid, build_rotation, SH2RGB
 
 @threestudio.register("spacetime-gaussian-splatting")
 class SpacetimeGaussianModel(GaussianBaseModel):
@@ -191,7 +191,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         return self._trbf_scale
     
     def get_features(self, delta_t):
-        return self._features_dc
+        return SH2RGB(self._features_dc)
     
     def oneupSHdegree(self):
         if self.active_sh_degree < self.max_sh_degree:
@@ -201,8 +201,8 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
         # TODO: whether use RGB2SH here?
-        # fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
-        fused_color = torch.tensor(np.asarray(pcd.colors)).float().cuda()   # RGB
+        fused_color = RGB2SH(torch.tensor(np.asarray(pcd.colors)).float().cuda())
+        # fused_color = torch.tensor(np.asarray(pcd.colors)).float().cuda()   # RGB
         # features = (
         #     torch.zeros((fused_color.shape[0], 3, (self.max_sh_degree + 1) ** 2))
         #     .float()
@@ -231,7 +231,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         )
 
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
-        self._features_dc = nn.Parameter(fused_color.unqueeze(1).contiguous().requires_grad_(True))
+        self._features_dc = nn.Parameter(fused_color.contiguous().requires_grad_(True))
 
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
@@ -552,4 +552,198 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             new_omega,
             new_normal,
         )
+
+    def construct_list_of_attributes(self):
+        l = ['x', 'y', 'z','trbf_center', 'trbf_scale' ,'nx', 'ny', 'nz'] # 'trbf_center', 'trbf_scale' 
+        # All channels except the 3 DC
+        # for i in range(self._features_dc.shape[1]*self._features_dc.shape[2]):
+        #     l.append('f_dc_{}'.format(i))
+        # for i in range(self._features_rest.shape[1]*self._features_rest.shape[2]):
+        #     l.append('f_rest_{}'.format(i))
+        for i in range(self._motion.shape[1]):
+            l.append('motion_{}'.format(i))
+
+        for i in range(self._features_dc.shape[1]):
+            l.append('f_dc_{}'.format(i))
+        # for i in range(self._features_rest.shape[1]):
+        #     l.append('f_rest_{}'.format(i))
+        l.append('opacity')
+        for i in range(self._scaling.shape[1]):
+            l.append('scale_{}'.format(i))
+        for i in range(self._rotation.shape[1]):
+            l.append('rot_{}'.format(i))
+        for i in range(self._omega.shape[1]):
+            l.append('omega_{}'.format(i))
+
+    def save_ply(self, path):
+        xyz = self._xyz.detach().cpu().numpy()
+        normals = np.zeros_like(xyz)
+        f_dc = self._features_dc.detach().cpu().numpy()
+        # f_rest = (
+        #     self._features_rest.detach()
+        #     .transpose(1, 2)
+        #     .flatten(start_dim=1)
+        #     .contiguous()
+        #     .cpu()
+        #     .numpy()
+        # )
+        opacities = self._opacity.detach().cpu().numpy()
+        scale = self._scaling.detach().cpu().numpy()
+        rotation = self._rotation.detach().cpu().numpy()
+
+        trbf_center= self._trbf_center.detach().cpu().numpy()
+
+        trbf_scale = self._trbf_scale.detach().cpu().numpy()
+        motion = self._motion.detach().cpu().numpy()
+
+        omega = self._omega.detach().cpu().numpy()
+
+        dtype_full = [
+            (attribute, "f4") for attribute in self.construct_list_of_attributes()
+        ]
+
+        elements = np.empty(xyz.shape[0], dtype=dtype_full)
+        attributes = np.concatenate(
+            (
+                xyz, trbf_center, trbf_scale, normals, motion, 
+                f_dc, opacities, scale, rotation, omega
+
+            ), axis=1
+        )
+        elements[:] = list(map(tuple, attributes))
+        el = PlyElement.describe(elements, "vertex")
+        PlyData([el]).write(path)
+
+
+    # Rewrite ply load function to take in temporal parameters
+    def load_ply(self, path):
+        plydata = PlyData.read(path)
+        ply_element = plydata.elements[0]
+
+        def maybe_load_from_ply(plye, key, init_func, shape=None):
+            if plye.__contains__(key):
+                value = np.asarray(plye[key])
+                if shape is not None:
+                    value = value.reshape(shape)
+            else:
+                assert shape is not None
+                value = init_func(shape)
+            return value
+
+        xyz = np.stack(
+            (
+                np.asarray(ply_element["x"]),
+                np.asarray(ply_element["y"]),
+                np.asarray(ply_element["z"]),
+            ),
+            axis=1,
+        )
+        n_points = xyz.shape[0]
+        opacities = np.asarray(ply_element["opacity"])[..., np.newaxis]
+
+        features_dc = np.zeros((xyz.shape[0], 3))
+        features_dc[:, 0] = np.asarray(ply_element["f_dc_0"])
+        features_dc[:, 1] = np.asarray(ply_element["f_dc_1"])
+        features_dc[:, 2] = np.asarray(ply_element["f_dc_2"])
+        # features_dc = SH2RGB(features_dc)
+
+        trbf_center = maybe_load_from_ply(ply_element, "trbf_center", np.zeros, (n_points, 1))
+        trbf_scale = maybe_load_from_ply(ply_element, "trbf_scale", np.ones, (n_points, 1))
+
+        n_motion = 9
+        motion = np.zeros((n_points, n_motion))
+        for i in range(n_motion):
+            motion[:, i] = maybe_load_from_ply(ply_element, "motion_"+str(i), np.zeros, (n_points,))
+
+        n_omega = 4
+        omegas = np.zeros((n_points, n_omega))
+        for i in range(n_omega):
+            omegas[:, i] = maybe_load_from_ply(ply_element, "omega_"+str(i), np.zeros, (n_points,))
+        
+        if self.max_sh_degree > 0:
+            extra_f_names = [
+                p.name
+                for p in ply_element.properties
+                if p.name.startswith("f_rest_")
+            ]
+            extra_f_names = sorted(extra_f_names, key=lambda x: int(x.split("_")[-1]))
+            assert len(extra_f_names) == 3 * (self.max_sh_degree + 1) ** 2 - 3
+            features_extra = np.zeros((xyz.shape[0], len(extra_f_names)))
+            for idx, attr_name in enumerate(extra_f_names):
+                features_extra[:, idx] = np.asarray(ply_element[attr_name])
+            # Reshape (P,F*SH_coeffs) to (P, F, SH_coeffs except DC)
+            features_extra = features_extra.reshape(
+                (features_extra.shape[0], 3, (self.max_sh_degree + 1) ** 2 - 1)
+            )
+
+        scale_names = [
+            p.name
+            for p in ply_element.properties
+            if p.name.startswith("scale_")
+        ]
+        scale_names = sorted(scale_names, key=lambda x: int(x.split("_")[-1]))
+        scales = np.zeros((xyz.shape[0], len(scale_names)))
+        for idx, attr_name in enumerate(scale_names):
+            scales[:, idx] = np.asarray(ply_element[attr_name])
+
+        rot_names = [
+            p.name for p in ply_element.properties if p.name.startswith("rot")
+        ]
+        rot_names = sorted(rot_names, key=lambda x: int(x.split("_")[-1]))
+        rots = np.zeros((xyz.shape[0], len(rot_names)))
+        for idx, attr_name in enumerate(rot_names):
+            rots[:, idx] = np.asarray(ply_element[attr_name])
+
+        self._xyz = nn.Parameter(
+            torch.tensor(xyz, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._features_dc = nn.Parameter(
+            torch.tensor(features_dc, dtype=torch.float, device="cuda")
+            .contiguous()
+            .requires_grad_(True)
+        )
+        # if self.max_sh_degree > 0:
+        #     self._features_rest = nn.Parameter(
+        #         torch.tensor(features_extra, dtype=torch.float, device="cuda")
+        #         .transpose(1, 2)
+        #         .contiguous()
+        #         .requires_grad_(True)
+        #     )
+        # else:
+        #     self._features_rest = nn.Parameter(
+        #         torch.tensor(features_dc, dtype=torch.float, device="cuda")[:, :, 1:]
+        #         .transpose(1, 2)
+        #         .contiguous()
+        #         .requires_grad_(True)
+        #     )
+        self._opacity = nn.Parameter(
+            torch.tensor(opacities, dtype=torch.float, device="cuda").requires_grad_(
+                True
+            )
+        )
+        self._scaling = nn.Parameter(
+            torch.tensor(scales, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._rotation = nn.Parameter(
+            torch.tensor(rots, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._trbf_center = nn.Parameter(
+            torch.tensor(trbf_center, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._trbf_scale = nn.Parameter(
+            torch.tensor(trbf_scale, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._motion = nn.Parameter(
+            torch.tensor(motion, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+        self._omega = nn.Parameter(
+            torch.tensor(omegas, dtype=torch.float, device="cuda").requires_grad_(True)
+        )
+
+        self.max_radii2D = torch.zeros((self._xyz.shape[0]), device="cuda")
+        self.active_sh_degree = self.max_sh_degree
+
+        self.computedtrbfscale = torch.exp(self._trbf_scale) # precomputed
+        self.computedopacity =self.opacity_activation(self._opacity)
+        self.computedscales = torch.exp(self._scaling) # change not very large
        
