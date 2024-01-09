@@ -1,6 +1,7 @@
 import os
 import random
 from dataclasses import dataclass, field
+from typing import Any, Dict
 
 import numpy as np
 import threestudio
@@ -76,9 +77,16 @@ class Gaussian4DGen(BaseLift3DSystem):
             colors=np.zeros((num_pts, 3)),
             normals=np.zeros((num_pts, 3)),
         )
-        self.geometry.create_from_pcd(pcd, 10)
+        self.geometry.create_from_pcd(pcd, self.geometry.cfg.spatial_lr_scale)
         self.geometry.training_setup()
-        return
+        # return
+        super().on_load_checkpoint(checkpoint)
+
+    def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
+        plyfilename = f"point_cloud_it{self.true_global_step}.ply"
+        plysavepath = os.path.join(self.get_save_dir(), plyfilename)
+        self.geometry.save_ply(plysavepath)
+        super().on_save_checkpoint(checkpoint)
 
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         self.geometry.update_learning_rate(self.global_step)
