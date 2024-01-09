@@ -411,6 +411,7 @@ class RandomCameraDataset(Dataset):
             "width": self.cfg.eval_width,
             "fovy": self.fovy[index],
             # "proj_mtx": self.proj_mtx[index],
+            "n_all_views": self.n_views
         }
 
     def collate(self, batch):

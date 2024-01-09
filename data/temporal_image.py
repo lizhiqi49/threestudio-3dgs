@@ -48,7 +48,7 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
             self.cfg.random_camera.update(
                 {"batch_size": self.num_frames * self.rand_cam_bs}
             )
-        self.setup(cfg, split)
+        self.setup(self.cfg, split)
         # self.single_image_dataset = SingleImageIterableDataset(self.cfg, split)
 
     def setup(self, cfg, split):
@@ -56,6 +56,7 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         self.rank = get_rank()
         self.cfg: TemporalRandomImageDataModuleConfig = cfg
 
+        assert self.cfg.use_random_camera   # Fix this later
         if self.cfg.use_random_camera:
             random_camera_cfg = parse_structured(
                 RandomCameraDataModuleConfig, self.cfg.get("random_camera", {})
@@ -134,6 +135,7 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         self.load_video_frames()
         self.prev_height = self.height
 
+        self.frame_indices = torch.arange(self.num_frames, dtype=torch.long)
         self.timestamps = torch.arange(self.num_frames, dtype=torch.float32)
         if self.cfg.norm_timestamp:
             self.timestamps = self.timestamps / self.num_frames
@@ -161,7 +163,7 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         )
         self.masks.append(mask)
         print(
-            f"[INFO] single image dataset: load image {frame_path} {self.rgb.shape}"
+            f"[INFO] single image dataset: load image {frame_path} {rgb.shape}"
         )
 
         # load depth
@@ -222,8 +224,13 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         self.masks = torch.cat(self.masks, dim=0)
         if self.cfg.requires_depth:
             self.depths = torch.cat(self.depths, dim=0)
+        else:
+            self.depths = None
+
         if self.cfg.requires_normal:
             self.normals = torch.cat(self.normals, dim=0)
+        else:
+            self.normals = None
 
 
     def get_all_images(self):
@@ -253,6 +260,7 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         if self.cfg.use_random_camera:
             batch_rand_cam = self.random_pose_generator.collate(None)
             batch_rand_cam["timestamp"] = self.timestamps.repeat_interleave(self.rand_cam_bs)
+            batch_rand_cam["frame_indices"] = self.frame_indices.repeat_interleave(self.rand_cam_bs)
             batch["random_camera"] = batch_rand_cam
 
         return batch
