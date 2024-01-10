@@ -17,6 +17,8 @@ from threestudio.utils.base import BaseObject
 from threestudio.utils.misc import C, parse_version
 from threestudio.utils.typing import *
 
+import clip
+from extern.ldm_zero123.modules.diffusionmodules.util import GroupNorm32
 
 def get_obj_from_str(string, reload=False):
     module, cls = string.rsplit(".", 1)
@@ -104,13 +106,42 @@ class TemporalStableZero123Guidance(BaseObject):
 
         self.config = OmegaConf.load(self.cfg.pretrained_config)
         # TODO: seems it cannot load into fp16...
-        self.weights_dtype = torch.float32
+        self.weights_dtype = torch.float16 if self.cfg.half_precision_weights else torch.float32
+        
         self.model = load_model_from_config(
             self.config,
             self.cfg.pretrained_model_name_or_path,
             device=self.device,
             vram_O=self.cfg.vram_O,
         )
+        self.model.to(dtype=self.weights_dtype)
+        # self.model.cond_stage_model.model.visual.ln_pre.to(dtype=torch.float32)
+        def recursive_layernorm_fp32(model):
+            for attr in model.__dir__():
+                if attr.startswith("_"):
+                    continue
+                try:
+                    module = getattr(model, attr)
+                except:
+                    continue  # ignore attributes like property, which can't be retrived using getattr?
+                if isinstance(module, clip.model.LayerNorm):
+                    print(module.__class__.__name__)
+                    module.to(dtype=torch.float32)
+                    
+                if type(module) == GroupNorm32:
+                    print(module.__class__.__name__)
+                    module.to(dtype=torch.float32)
+                    
+                elif isinstance(module, torch.nn.Sequential):
+                    print(module.__class__.__name__)
+                    for sub_module in module:
+                        recursive_layernorm_fp32(sub_module)
+                elif isinstance(module, torch.nn.Module):
+                    print(module.__class__.__name__)
+                    if hasattr(module, "in_layers"):
+                        print(module.__class__.__name__)
+                    recursive_layernorm_fp32(module)
+        recursive_layernorm_fp32(self.model)
 
         for p in self.model.parameters():
             p.requires_grad_(False)
@@ -196,7 +227,7 @@ class TemporalStableZero123Guidance(BaseObject):
         img: Float[Tensor, "B 3 256 256"],
     ) -> Tuple[Float[Tensor, "B 1 768"], Float[Tensor, "B 4 32 32"]]:
         img = img * 2.0 - 1.0
-        c_crossattn = self.model.get_learned_conditioning(img.to(self.weights_dtype))
+        c_crossattn = self.model.get_learned_conditioning(img.to(self.weights_dtype)).to(self.weights_dtype)
         c_concat = self.model.encode_first_stage(img.to(self.weights_dtype)).mode()
         return c_crossattn, c_concat
 
@@ -245,7 +276,7 @@ class TemporalStableZero123Guidance(BaseObject):
                 ),
             ],
             dim=-1,
-        )[:, None, :].to(self.device)
+        )[:, None, :].to(self.device, dtype=self.weights_dtype)
         cond = {}
         clip_emb = self.model.cc_projection(
             torch.cat(
@@ -318,22 +349,8 @@ class TemporalStableZero123Guidance(BaseObject):
             # pred noise
             x_in = torch.cat([latents_noisy] * 2)
             t_in = torch.cat([t] * 2)
-            if self.cfg.chunk_size is not None:
-                noise_preds = []
-                chunk_start_idx = chunk_end_idx = 0
-                while chunk_end_idx < 2 * batch_size:
-                    chunk_end_idx = min(2*batch_size, chunk_start_idx + self.cfg.chunk_size)
-                    cond_ = {
-                        k: v[chunk_start_idx:chunk_end_idx] for k, v in cond.items()
-                    }
-                    x_in_ = x_in[chunk_start_idx:chunk_end_idx]
-                    t_in_ = t_in[chunk_start_idx:chunk_end_idx]
-                    noise_pred_ = self.model.apply(x_in_, t_in_, cond_)
-                    noise_preds.append(noise_pred_)
-                    chunk_start_idx += self.cfg.chunk_size
-                noise_pred = torch.cat(noise_preds, dim=0)
-            else:
-                noise_pred = self.model.apply_model(x_in, t_in, cond)
+
+            noise_pred = self.model.apply_model(x_in.to(self.weights_dtype), t_in, cond)
 
         # perform guidance
         noise_pred_uncond, noise_pred_cond = noise_pred.chunk(2)
