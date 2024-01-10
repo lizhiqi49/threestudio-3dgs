@@ -231,7 +231,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         )
 
         self._xyz = nn.Parameter(fused_point_cloud.requires_grad_(True))
-        self._features_dc = nn.Parameter(fused_color.contiguous().requires_grad_(True))
+        self._features_dc = nn.Parameter(fused_color.unsqueeze(1).contiguous().requires_grad_(True))
 
         self._scaling = nn.Parameter(scales.requires_grad_(True))
         self._rotation = nn.Parameter(rots.requires_grad_(True))
@@ -563,7 +563,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         for i in range(self._motion.shape[1]):
             l.append('motion_{}'.format(i))
 
-        for i in range(self._features_dc.shape[1]):
+        for i in range(self._features_dc.shape[-1]):
             l.append('f_dc_{}'.format(i))
         # for i in range(self._features_rest.shape[1]):
         #     l.append('f_rest_{}'.format(i))
@@ -575,10 +575,14 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         for i in range(self._omega.shape[1]):
             l.append('omega_{}'.format(i))
 
+        return l
+
     def save_ply(self, path):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        
         xyz = self._xyz.detach().cpu().numpy()
         normals = np.zeros_like(xyz)
-        f_dc = self._features_dc.detach().cpu().numpy()
+        f_dc = self._features_dc.squeeze(1).detach().cpu().numpy()
         # f_rest = (
         #     self._features_rest.detach()
         #     .transpose(1, 2)
@@ -699,6 +703,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         )
         self._features_dc = nn.Parameter(
             torch.tensor(features_dc, dtype=torch.float, device="cuda")
+            .unsqueeze(1)
             .contiguous()
             .requires_grad_(True)
         )

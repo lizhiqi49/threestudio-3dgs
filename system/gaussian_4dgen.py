@@ -84,7 +84,7 @@ class Gaussian4DGen(BaseLift3DSystem):
 
     def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
         plyfilename = f"point_cloud_it{self.true_global_step}.ply"
-        plysavepath = os.path.join(self.get_save_dir(), plyfilename)
+        plysavepath = os.path.join(self.get_save_dir(), "point_clouds", plyfilename)
         self.geometry.save_ply(plysavepath)
         super().on_save_checkpoint(checkpoint)
 
@@ -298,6 +298,14 @@ class Gaussian4DGen(BaseLift3DSystem):
         return {"loss": total_loss}
 
     def validation_step(self, batch, batch_idx):
+        if self.stage != "static" and not batch.__contains__("timestamp"):
+            batch.update(
+                {
+                    "timestamp": torch.as_tensor(
+                        [batch["index"] / batch["n_all_views"]], device=self.device
+                    )
+                }
+            )
         out = self(batch)
         self.save_image_grid(
             f"it{self.true_global_step}-val/{batch['index'][0]}.png",
@@ -337,6 +345,51 @@ class Gaussian4DGen(BaseLift3DSystem):
             step=self.true_global_step,
         )
 
+        if self.stage != "static":
+            if batch["index"] == 0:
+                self.batch_ref_eval = batch
+            
+            self.batch_ref_eval["timestamp"] = batch["timestamp"]
+            out_ref = self(self.batch_ref_eval)
+            self.save_image_grid(
+                f"it{self.true_global_step}-val-ref/{batch['index'][0]}.png",
+                (
+                    [
+                        {
+                            "type": "rgb",
+                            "img": batch["rgb"][0],
+                            "kwargs": {"data_format": "HWC"},
+                        }
+                    ]
+                    if "rgb" in batch
+                    else []
+                )
+                + [
+                    {
+                        "type": "rgb",
+                        "img": out_ref["comp_rgb"][0],
+                        "kwargs": {"data_format": "HWC"},
+                    },
+                ]
+                + (
+                    [
+                        {
+                            "type": "rgb",
+                            "img": out_ref["comp_normal"][0],
+                            "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
+                        }
+                    ]
+                    if "comp_normal" in out_ref
+                    else []
+                ),
+                # claforte: TODO: don't hardcode the frame numbers to record... read them from cfg instead.
+                name=f"validation_step_batchidx_{batch_idx}-ref"
+                if batch_idx in [0, 7, 15, 23, 29]
+                else None,
+                step=self.true_global_step,
+            )
+
+
     def on_validation_epoch_end(self):
         filestem = f"it{self.true_global_step}-val"
         self.save_img_sequence(
@@ -348,8 +401,27 @@ class Gaussian4DGen(BaseLift3DSystem):
             name="validation_epoch_end",
             step=self.true_global_step,
         )
+        if self.stage != "static":
+            filestem = f"it{self.true_global_step}-val-ref"
+            self.save_img_sequence(
+                filestem,
+                filestem,
+                "(\d+)\.png",
+                save_format="mp4",
+                fps=30,
+                name="validation_epoch_end-ref",
+                step=self.true_global_step,
+            )
 
     def test_step(self, batch, batch_idx):
+        if self.stage != "static" and not batch.__contains__("timestamp"):
+            batch.update(
+                {
+                    "timestamp": torch.as_tensor(
+                        [batch["index"] / batch["n_all_views"]], device=self.device
+                    )
+                }
+            )
         out = self(batch)
         self.save_image_grid(
             f"it{self.true_global_step}-test/{batch['index'][0]}.png",
@@ -385,6 +457,46 @@ class Gaussian4DGen(BaseLift3DSystem):
             name="test_step",
             step=self.true_global_step,
         )
+        if self.stage != "static":
+            if batch["index"] == 0:
+                self.batch_ref_eval = batch
+            
+            self.batch_ref_eval["timestamp"] = batch["timestamp"]
+            out_ref = self(self.batch_ref_eval)
+            self.save_image_grid(
+                f"it{self.true_global_step}-test-ref/{batch['index'][0]}.png",
+                (
+                    [
+                        {
+                            "type": "rgb",
+                            "img": batch["rgb"][0],
+                            "kwargs": {"data_format": "HWC"},
+                        }
+                    ]
+                    if "rgb" in batch
+                    else []
+                )
+                + [
+                    {
+                        "type": "rgb",
+                        "img": out_ref["comp_rgb"][0],
+                        "kwargs": {"data_format": "HWC"},
+                    },
+                ]
+                + (
+                    [
+                        {
+                            "type": "rgb",
+                            "img": out_ref["comp_normal"][0],
+                            "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
+                        }
+                    ]
+                    if "comp_normal" in out_ref
+                    else []
+                ),
+                name=f"test-step-ref",
+                step=self.true_global_step,
+            )
 
     def on_test_epoch_end(self):
         self.save_img_sequence(
@@ -396,3 +508,13 @@ class Gaussian4DGen(BaseLift3DSystem):
             name="test",
             step=self.true_global_step,
         )
+        if self.stage != "static":
+            self.save_img_sequence(
+                f"it{self.true_global_step}-test-ref",
+                f"it{self.true_global_step}-test-ref",
+                "(\d+)\.png",
+                save_format="mp4",
+                fps=30,
+                name="test-ref",
+                step=self.true_global_step,
+            )
