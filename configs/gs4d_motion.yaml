@@ -7,7 +7,7 @@ data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   video_frames_dir: ./load/videos/anya2
   norm_timestamp: true
-  num_frames: 10
+  num_frames: 14
   height: [256, 512]
   width: [256, 512]
   resolution_milestones: [300]
@@ -81,6 +81,8 @@ system:
     pc_init_radius: 0.5
     opacity_init: 0.05
     max_num: 500000
+
+    enable_deformation: true
 
   exporter_type: "gaussian-mesh-exporter"
 
