@@ -5,9 +5,9 @@ seed: 0
 
 data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
-  video_frames_dir: ./load/videos/anya
+  video_frames_dir: ./load/videos/anya2
   norm_timestamp: true
-  num_frames: 8
+  num_frames: 10
   height: [256, 512]
   width: [256, 512]
   resolution_milestones: [300]
@@ -44,21 +44,21 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
 
 system_type: "gaussian-splatting-4dgen-system"
 system:
-  stage: static
+  stage: motion
 
   geometry_type: "spacetime-gaussian-splatting"
   geometry:
-    position_lr: [0, 0.00016, 0.0000016, 1000]
-    scale_lr: [0, 0.01, 0.001, 1000]
-    feature_lr: 0.0025
+    position_lr: 0.0000016
+    scale_lr: 0.001
+    feature_lr: 0.01
     opacity_lr: 0.05
     rotation_lr: 0.001
-    densification_interval: 100
-    prune_interval: 100
+    densification_interval: 1000
+    prune_interval: 1000
     opacity_reset_interval: 100000
-    densify_from_iter: 0
+    densify_from_iter: ${trainer.max_steps}
     densify_until_iter: ${trainer.max_steps}
-    prune_from_iter: 0
+    prune_from_iter: ${trainer.max_steps}
     prune_until_iter: ${trainer.max_steps}
     densify_grad_threshold: 0.01
     min_opac_prune: 0.005
@@ -130,8 +130,9 @@ system:
 
   loss:
     lambda_sds: 0.1
-    lambda_rgb: [100, 500., 1000., 400]
-    lambda_mask: 50.
+    lambda_sds_vid: 0
+    lambda_rgb: [0, 100, 10000, 500]
+    lambda_mask: 1000.
     lambda_depth: 0. # 0.05
     lambda_depth_rel: 0. # [0, 0, 0.05, 100]
     lambda_normal: 0. # [0, 0, 0.05, 100]

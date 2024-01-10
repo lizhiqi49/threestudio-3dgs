@@ -110,7 +110,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
 
         means3D = pc.get_xyz
         means2D = screenspace_points
-        pointopacity = pc.get_opacity
+        opacity = pc.get_opacity
         
         trbfcenter = pc.get_trbfcenter
         trbfscale = pc.get_trbfscale
@@ -119,7 +119,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         trbfdistance =  trbfdistanceoffset / torch.exp(trbfscale) 
         trbfoutput = basicfunction(trbfdistance)
         
-        opacity = pointopacity * trbfoutput  # - 0.5
+        # opacity = opacity * trbfoutput  # - 0.5
         pc.trbfoutput = trbfoutput
 
         cov3D_precomp = None
@@ -128,16 +128,13 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
 
         shs = None
         tforpoly = trbfdistanceoffset.detach()
-        means3D = (
-            means3D 
-            + pc._motion[:, 0:3] * tforpoly 
-            + pc._motion[:, 3:6] * tforpoly * tforpoly 
-            + pc._motion[:, 6:9] * tforpoly *tforpoly * tforpoly
-        )
 
+        motion = pc.get_motion(tforpoly)
         rotations = pc.get_rotation(tforpoly) # to try use 
+        # rotations = pc._rotation
         colors_precomp = pc.get_features(tforpoly).reshape(pc.get_xyz.shape[0], 3)
-
+        means3D = means3D + motion
+        
         # Rasterize visible Gaussians to image, obtain their radii (on screen).
         rendered_image, radii, rendered_depth, rendered_alpha = rasterizer(
             means3D=means3D,

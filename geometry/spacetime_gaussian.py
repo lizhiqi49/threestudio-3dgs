@@ -59,7 +59,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         # Add temporal parameters
         self._motion = torch.empty(0)
         self.percent_dense = 0
-        self.spatial_lr_scale = 0
+        self.spatial_lr_scale = self.cfg.spatial_lr_scale
         self._omega = torch.empty(0)
         
         self.delta_t = None
@@ -175,7 +175,14 @@ class SpacetimeGaussianModel(GaussianBaseModel):
 
             self.create_from_pcd(pcd, 10)
             self.training_setup()
-        
+    
+    def get_motion(self, delta_t):
+        motion = (
+            self._motion[:, 0:3] * delta_t 
+            + self._motion[:, 3:6] * delta_t * delta_t
+            + self._motion[:, 6:9] * delta_t * delta_t * delta_t
+        )
+        return motion
         
     def get_rotation(self, delta_t):
         rotation = self._rotation + delta_t * self._omega
@@ -281,31 +288,31 @@ class SpacetimeGaussianModel(GaussianBaseModel):
 
         position_lr_init = C(training_args.position_lr, 0, 0) * self.spatial_lr_scale
         l = [
-            {
-                "params": [self._xyz],
-                "lr": position_lr_init,
-                "name": "xyz",
-            },
-            {
-                "params": [self._features_dc],
-                "lr": C(training_args.feature_lr, 0, 0),
-                "name": "f_dc",
-            },
-            {
-                "params": [self._opacity],
-                "lr": C(training_args.opacity_lr, 0, 0),
-                "name": "opacity",
-            },
-            {
-                "params": [self._scaling],
-                "lr": C(training_args.scaling_lr, 0, 0),
-                "name": "scaling",
-            },
-            {
-                "params": [self._rotation],
-                "lr": C(training_args.rotation_lr, 0, 0),
-                "name": "rotation",
-            },
+            # {
+            #     "params": [self._xyz],
+            #     "lr": position_lr_init,
+            #     "name": "xyz",
+            # },
+            # {
+            #     "params": [self._features_dc],
+            #     "lr": C(training_args.feature_lr, 0, 0),
+            #     "name": "f_dc",
+            # },
+            # {
+            #     "params": [self._opacity],
+            #     "lr": C(training_args.opacity_lr, 0, 0),
+            #     "name": "opacity",
+            # },
+            # {
+            #     "params": [self._scaling],
+            #     "lr": C(training_args.scaling_lr, 0, 0),
+            #     "name": "scaling",
+            # },
+            # {
+            #     "params": [self._rotation],
+            #     "lr": C(training_args.rotation_lr, 0, 0),
+            #     "name": "rotation",
+            # },
             {
                 "params": [self._omega],
                 "lr": C(training_args.omega_lr, 0, 0),
@@ -652,6 +659,10 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         # features_dc = SH2RGB(features_dc)
 
         trbf_center = maybe_load_from_ply(ply_element, "trbf_center", np.zeros, (n_points, 1))
+        # if ply_element.__contains__("trbf_center"):
+        #     trbf_center = np.array(ply_element["trbf_center"]).reshape(n_points, 1)
+        # else:
+        #     trbf_center = np.random.rand(n_points, 1)
         trbf_scale = maybe_load_from_ply(ply_element, "trbf_scale", np.ones, (n_points, 1))
 
         n_motion = 9

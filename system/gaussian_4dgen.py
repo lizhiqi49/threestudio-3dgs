@@ -41,7 +41,7 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         prompt_processor_vid_type: Optional[str] = ""
         prompt_processor_vid: dict = field(default_factory=dict)
-        guidance_vid_type: Optional[str] = "stable-video-diffusion-guidance"
+        guidance_vid_type: Optional[str] = ""
         guidance_vid: dict = field(default_factory=dict)
 
         freq: dict = field(default_factory=dict)
@@ -81,12 +81,6 @@ class Gaussian4DGen(BaseLift3DSystem):
         self.geometry.training_setup()
         # return
         super().on_load_checkpoint(checkpoint)
-
-    def on_save_checkpoint(self, checkpoint: Dict[str, Any]) -> None:
-        plyfilename = f"point_cloud_it{self.true_global_step}.ply"
-        plysavepath = os.path.join(self.get_save_dir(), "point_clouds", plyfilename)
-        self.geometry.save_ply(plysavepath)
-        super().on_save_checkpoint(checkpoint)
 
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         self.geometry.update_learning_rate(self.global_step)
@@ -168,8 +162,10 @@ class Gaussian4DGen(BaseLift3DSystem):
 
             # color loss
             gt_rgb = gt_rgb * gt_mask.float()
-            set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"] * gt_mask.float()))
-
+            if self.stage == "static":
+                set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"] * gt_mask.float()))
+            else:
+                set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"]) / gt_rgb.shape[0])
             # mask loss
             set_loss("mask", F.mse_loss(gt_mask.float(), out["comp_mask"]))
 
@@ -499,3 +495,6 @@ class Gaussian4DGen(BaseLift3DSystem):
                 name="test-ref",
                 step=self.true_global_step,
             )
+            
+        plysavepath = os.path.join(self.get_save_dir(), f"point_cloud_it{self.true_global_step}.ply")
+        self.geometry.save_ply(plysavepath)
