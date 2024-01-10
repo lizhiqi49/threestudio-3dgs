@@ -23,7 +23,7 @@ from ..geometry.gaussian_base import BasicPointCloud, Camera
 class Gaussian4DGen(BaseLift3DSystem):
     @dataclass
     class Config(BaseLift3DSystem.Config):
-        stage: str = "static"   # ["static", "motion", "refine"]
+        stage: str = "static"  # ["static", "motion", "refine"]
 
         # guidances
         prompt_processor_2d_type: Optional[str] = ""
@@ -140,6 +140,7 @@ class Gaussian4DGen(BaseLift3DSystem):
             shading = "diffuse"
             batch["shading"] = shading
         elif guidance == "zero123":
+            # default store the reference view camera config, switch to random camera for zero123 guidance
             batch = batch["random_camera"]
             ambient_ratio = (
                 self.cfg.ambient_ratio_min
@@ -228,6 +229,18 @@ class Gaussian4DGen(BaseLift3DSystem):
                 + (normal[:, :, 1:, :] - normal[:, :, :-1, :]).square().mean(),
             )
 
+        ## cross entropy loss for opacity to make it binary
+        if self.C(self.cfg.loss.lambda_opacity_binary, "interval") > 0:
+            radii = out["radii"]
+            opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(radii), 1, 1)
+            visibility_filter = torch.stack(radii) > 0
+            vis_opacities = opacity[visibility_filter]
+            set_loss(
+                "opacity_binary",
+                -(vis_opacities * torch.log(vis_opacities + 1e-10)
+                  + (1 - vis_opacities) * torch.log(1 - vis_opacities + 1e-10)).mean()
+            )
+
         loss = 0.0
         for name, value in loss_terms.items():
             self.log(f"train/{name}", value)
@@ -257,6 +270,7 @@ class Gaussian4DGen(BaseLift3DSystem):
         out_ref = self.training_substep(batch, batch_idx, guidance="ref")
         total_loss += out_ref["loss"]
 
+
         self.log("train/loss", total_loss, prog_bar=True)
 
         out = out_zero123
@@ -277,6 +291,9 @@ class Gaussian4DGen(BaseLift3DSystem):
         opt.zero_grad(set_to_none=True)
 
         ## TODO : add sugar regulation loss
+        """
+            1. add opacity cross entropy loss between [start step, end step]
+        """
 
         return {"loss": total_loss}
 
