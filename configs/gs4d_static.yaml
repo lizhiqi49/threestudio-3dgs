@@ -124,6 +124,7 @@ system:
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
     lambda_opacity_binary: 0 # [0, 0.1, 0.1, 1000]
+    lambda_density_regulation: [0, 0.1, 0.1, 1000]
 
   optimizer:
     name: Adam
@@ -135,6 +136,8 @@ system:
       background:
         lr: 0.001
 
+  sugar:
+    reset_neighbors_every: 500
 
 trainer:
   max_steps: 5000

@@ -7,6 +7,7 @@ import numpy as np
 import threestudio
 import torch
 import torch.nn.functional as F
+
 from threestudio.systems.base import BaseLift3DSystem
 from threestudio.systems.utils import parse_optimizer, parse_scheduler
 from threestudio.utils.loss import tv_loss
@@ -17,6 +18,7 @@ from torch.cuda.amp import autocast
 from torchmetrics import PearsonCorrCoef
 
 from ..geometry.gaussian_base import BasicPointCloud, Camera
+from ..sugar.sugar_model import SuGaR
 
 
 @threestudio.register("gaussian-splatting-4dgen-system")
@@ -55,8 +57,8 @@ class Gaussian4DGen(BaseLift3DSystem):
         # create geometry, material, background, renderer
         super().configure()
         self.automatic_optimization = False
-
         self.stage = self.cfg.stage
+        self.sugar = SuGaR(self.geometry.get_xyz)
 
     def configure_optimizers(self):
         optim = self.geometry.optimizer
@@ -229,17 +231,26 @@ class Gaussian4DGen(BaseLift3DSystem):
                 + (normal[:, :, 1:, :] - normal[:, :, :-1, :]).square().mean(),
             )
 
+        radii = out["radii"]
+        opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(radii), 1, 1)
+        visibility_filter = torch.stack(radii) > 0
+
         ## cross entropy loss for opacity to make it binary
         if self.C(self.cfg.loss.lambda_opacity_binary, "interval") > 0:
-            radii = out["radii"]
-            opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(radii), 1, 1)
-            visibility_filter = torch.stack(radii) > 0
             vis_opacities = opacity[visibility_filter]
             set_loss(
                 "opacity_binary",
                 -(vis_opacities * torch.log(vis_opacities + 1e-10)
                   + (1 - vis_opacities) * torch.log(1 - vis_opacities + 1e-10)).mean()
             )
+
+        ## density regulation loss
+        if self.C(self.cfg.loss.lambda_density_regulation, "interval") > 0:
+            sampling_mask = visibility_filter
+            current_step = self.true_global_step
+            if current_step % self.cfg.sugar.reset_neighbors_every == 0:
+                self.sugar.reset_neighbors()
+
 
         loss = 0.0
         for name, value in loss_terms.items():
@@ -270,7 +281,6 @@ class Gaussian4DGen(BaseLift3DSystem):
         out_ref = self.training_substep(batch, batch_idx, guidance="ref")
         total_loss += out_ref["loss"]
 
-
         self.log("train/loss", total_loss, prog_bar=True)
 
         out = out_zero123
@@ -293,6 +303,7 @@ class Gaussian4DGen(BaseLift3DSystem):
         ## TODO : add sugar regulation loss
         """
             1. add opacity cross entropy loss between [start step, end step]
+            2. add density regulation loss
         """
 
         return {"loss": total_loss}
@@ -348,7 +359,7 @@ class Gaussian4DGen(BaseLift3DSystem):
         if self.stage != "static":
             if batch["index"] == 0:
                 self.batch_ref_eval = batch
-            
+
             self.batch_ref_eval["timestamp"] = batch["timestamp"]
             out_ref = self(self.batch_ref_eval)
             self.save_image_grid(
@@ -388,7 +399,6 @@ class Gaussian4DGen(BaseLift3DSystem):
                 else None,
                 step=self.true_global_step,
             )
-
 
     def on_validation_epoch_end(self):
         filestem = f"it{self.true_global_step}-val"
@@ -460,7 +470,7 @@ class Gaussian4DGen(BaseLift3DSystem):
         if self.stage != "static":
             if batch["index"] == 0:
                 self.batch_ref_eval = batch
-            
+
             self.batch_ref_eval["timestamp"] = batch["timestamp"]
             out_ref = self(self.batch_ref_eval)
             self.save_image_grid(
