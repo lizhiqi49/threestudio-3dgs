@@ -92,7 +92,7 @@ class TemporalStableZero123Guidance(BaseObject):
         grad_clip: Optional[
             Any
         ] = None  # field(default_factory=lambda: [0, 2.0, 8.0, 1000])
-        half_precision_weights: bool = False
+        half_precision_weights: bool = True
 
         min_step_percent: float = 0.02
         max_step_percent: float = 0.98
@@ -125,21 +125,12 @@ class TemporalStableZero123Guidance(BaseObject):
                 except:
                     continue  # ignore attributes like property, which can't be retrived using getattr?
                 if isinstance(module, clip.model.LayerNorm):
-                    print(module.__class__.__name__)
                     module.to(dtype=torch.float32)
                     
-                if type(module) == GroupNorm32:
-                    print(module.__class__.__name__)
-                    module.to(dtype=torch.float32)
-                    
-                elif isinstance(module, torch.nn.Sequential):
-                    print(module.__class__.__name__)
+                elif isinstance(module, torch.nn.Sequential) or isinstance(module, torch.nn.ModuleList):
                     for sub_module in module:
                         recursive_layernorm_fp32(sub_module)
                 elif isinstance(module, torch.nn.Module):
-                    print(module.__class__.__name__)
-                    if hasattr(module, "in_layers"):
-                        print(module.__class__.__name__)
                     recursive_layernorm_fp32(module)
         recursive_layernorm_fp32(self.model)
 

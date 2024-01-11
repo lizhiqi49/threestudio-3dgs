@@ -7,7 +7,7 @@ data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   video_frames_dir: ./load/videos/anya2
   norm_timestamp: true
-  num_frames: 14
+  num_frames: 10
   height: [256, 512]
   width: [256, 512]
   resolution_milestones: [300]
@@ -20,7 +20,7 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   random_camera: # threestudio/data/uncond.py -> RandomCameraDataModuleConfig
     height: 256
     width: 256
-    batch_size: 1
+    batch_size: 2
     eval_height: 512
     eval_width: 512
     eval_batch_size: 1
@@ -82,7 +82,9 @@ system:
     opacity_init: 0.05
     max_num: 500000
 
-    enable_deformation: true
+    enable_deformation: false
+    deformation_lr: 0.00064
+    grid_lr: 0.0064
 
   exporter_type: "gaussian-mesh-exporter"
 
@@ -113,8 +115,8 @@ system:
     cond_azimuth_deg: ${data.default_azimuth_deg}
     cond_camera_distance: ${data.default_camera_distance}
     guidance_scale: 3.0
-    min_step_percent: 0.02  # (start_iter, start_val, end_val, end_iter)
-    max_step_percent: 0.5
+    min_step_percent: 0.1  # (start_iter, start_val, end_val, end_iter)
+    max_step_percent: 0.6
     chunk_size: null
 
   prompt_processor_3d_type: null
@@ -133,7 +135,7 @@ system:
   loss:
     lambda_sds: 0.1
     lambda_sds_vid: 0
-    lambda_rgb: [0, 100, 10000, 500]
+    lambda_rgb: 10000
     lambda_mask: 1000.
     lambda_depth: 0. # 0.05
     lambda_depth_rel: 0. # [0, 0, 0.05, 100]
