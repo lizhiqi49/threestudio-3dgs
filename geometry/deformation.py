@@ -51,7 +51,7 @@ class ModelHiddenParams(ParamGroup):
         self.opacity_pe = 2
         self.timenet_width = 64
         self.timenet_output = 32
-        self.bounds = 1.6
+        self.bounds = 1.0
         self.plane_tv_weight = 0.0001
         self.time_smoothness_weight = 0.01
         self.l1_time_planes = 0.0001

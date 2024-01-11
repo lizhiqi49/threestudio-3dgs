@@ -162,10 +162,11 @@ class Gaussian4DGen(BaseLift3DSystem):
 
             # color loss
             gt_rgb = gt_rgb * gt_mask.float()
-            if self.stage == "static":
-                set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"] * gt_mask.float()))
-            else:
-                set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"]) / gt_rgb.shape[0])
+            set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"] * gt_mask.float()))
+            # if self.stage == "static":
+            #     set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"] * gt_mask.float()))
+            # else:
+            #     set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"]) / gt_rgb.shape[0])
             # mask loss
             set_loss("mask", F.mse_loss(gt_mask.float(), out["comp_mask"]))
 
@@ -246,6 +247,15 @@ class Gaussian4DGen(BaseLift3DSystem):
         opt = self.optimizers()
 
         total_loss = 0.0
+        
+        self.log(
+            "gauss_num",
+            int(self.geometry.get_xyz.shape[0]),
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
 
         out_zero123 = self.training_substep(batch, batch_idx, guidance="zero123")
         total_loss += out_zero123["loss"]
