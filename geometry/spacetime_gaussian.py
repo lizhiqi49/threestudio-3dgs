@@ -725,7 +725,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         ]
 
         elements = np.empty(xyz.shape[0], dtype=dtype_full)
-        attributes = np.concatenate(*attributes, axis=1)
+        attributes = np.concatenate(attributes, axis=1)
         elements[:] = list(map(tuple, attributes))
         el = PlyElement.describe(elements, "vertex")
         PlyData([el]).write(path)
