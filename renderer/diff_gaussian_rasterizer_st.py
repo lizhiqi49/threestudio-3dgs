@@ -108,36 +108,36 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
 
         rasterizer = GaussianRasterizer(raster_settings=raster_settings)
 
-        means3D = pc.get_xyz
+        # means3D = pc.get_xyz
         means2D = screenspace_points
-        pointopacity = pc.get_opacity
+        # opacity = pc.get_opacity
         
-        trbfcenter = pc.get_trbfcenter
-        trbfscale = pc.get_trbfscale
+        # trbfcenter = pc.get_trbfcenter
+        # trbfscale = pc.get_trbfscale
         
-        trbfdistanceoffset = viewpoint_camera.timestamp * pointtimes - trbfcenter
-        trbfdistance =  trbfdistanceoffset / torch.exp(trbfscale) 
-        trbfoutput = basicfunction(trbfdistance)
+        # trbfdistanceoffset = viewpoint_camera.timestamp * pointtimes - trbfcenter
+        # trbfdistance =  trbfdistanceoffset / torch.exp(trbfscale) 
+        # trbfoutput = basicfunction(trbfdistance)
         
-        opacity = pointopacity * trbfoutput  # - 0.5
-        pc.trbfoutput = trbfoutput
+        # # opacity = opacity * trbfoutput  # - 0.5
+        # pc.trbfoutput = trbfoutput
 
-        cov3D_precomp = None
 
-        scales = pc.get_scaling
+        # scales = pc.get_scaling
 
+        # tforpoly = trbfdistanceoffset.detach()
+
+        # motion = pc.get_motion(tforpoly)
+        # rotations = pc.get_rotation(tforpoly) # to try use 
+        # # rotations = pc._rotation
+        # colors_precomp = pc.get_features(tforpoly).reshape(pc.get_xyz.shape[0], 3)
+        # means3D = means3D + motion
+        
+        means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_all(viewpoint_camera.timestamp)
+        
         shs = None
-        tforpoly = trbfdistanceoffset.detach()
-        means3D = (
-            means3D 
-            + pc._motion[:, 0:3] * tforpoly 
-            + pc._motion[:, 3:6] * tforpoly * tforpoly 
-            + pc._motion[:, 6:9] * tforpoly *tforpoly * tforpoly
-        )
-
-        rotations = pc.get_rotation(tforpoly) # to try use 
-        colors_precomp = pc.get_features(tforpoly).reshape(pc.get_xyz.shape[0], 3)
-
+        cov3D_precomp = None
+        
         # Rasterize visible Gaussians to image, obtain their radii (on screen).
         rendered_image, radii, rendered_depth, rendered_alpha = rasterizer(
             means3D=means3D,
