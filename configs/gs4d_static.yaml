@@ -123,8 +123,8 @@ system:
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
-    lambda_opacity_binary: 0 # [0, 0.1, 0.1, 1000]
-    lambda_density_regulation: [0, 0.1, 0.1, 1000]
+    lambda_opacity_binary: [1000, 0.1, 0.1, 1500]
+    lambda_density_regulation: [1500, 1., 1., 2500]
 
   optimizer:
     name: Adam
@@ -137,19 +137,24 @@ system:
         lr: 0.001
 
   sugar:
-    reset_neighbors_every: 500
-    start_regularization_from: 0
-    n_samples_for_sdf_regularization: 5000 # 1000000
-    sdf_sampling_scale_factor: 1.5
-    sdf_sampling_proportional_to_volume: false
-    use_sdf_estimation_loss: true
-    use_sdf_better_normal_loss: true
-    enforce_samples_to_be_on_surface: false
-    sdf_estimation_mode: "density"
-    density_threshold: 1.
-    density_factor: 1.
-    start_sdf_better_normal_from: 0 # 9000
-    start_sdf_estimation_from: 0 # 9000
+    reset_neighbors_every: 100
+    start_regularization_from: 1500 # consistent with lambda_density_regulation
+    n_samples_for_sdf_regularization: 5000
+    start_sdf_better_normal_from: 3000
+#    sdf_sampling_scale_factor: 1.5
+#    sdf_sampling_proportional_to_volume: false
+#    use_sdf_estimation_loss: true
+#    use_sdf_better_normal_loss: true
+#    enforce_samples_to_be_on_surface: false
+#    sdf_estimation_mode: "density"
+#    density_threshold: 1.
+#    density_factor: 1.
+#    start_sdf_better_normal_from: 0 # 9000
+#    start_sdf_estimation_from: 0 # 9000
+#    use_projection_as_estimation: true
+#    normalize_by_sdf_std: false
+#    sample_only_in_gaussians_close_to_surface: false
+#    squared_sdf_estimation_loss: false
 
 
 trainer:

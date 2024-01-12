@@ -1,6 +1,6 @@
 import numpy as np
 import torch
-from pytorch3d.ops import knn_points
+from pytorch3d.ops import knn_points, estimate_pointcloud_normals
 from pytorch3d.transforms import quaternion_apply, matrix_to_quaternion, quaternion_to_matrix
 from ..geometry.gaussian_base import GaussianBaseModel
 
@@ -125,7 +125,6 @@ class SuGaR():
                 log_beta.to(self.gaussians.device),
             ).to(self.gaussians.device)
 
-
     @property
     def points(self):
         return self.gaussians.get_xyz
@@ -213,7 +212,6 @@ class SuGaR():
             sampling_scale_factor * self.scaling[random_indices] * torch.randn_like(self.points[random_indices]))
 
         return random_points, random_indices
-
 
     def reset_neighbors(self, knn_to_track: int = None):
         if self.binded_to_surface_mesh:
@@ -332,6 +330,65 @@ class SuGaR():
 
         return fields
 
+    def get_smallest_axis(self, return_idx=False):
+        """Returns the smallest axis of the Gaussians.
+
+        Args:
+            return_idx (bool, optional): _description_. Defaults to False.
+
+        Returns:
+            _type_: _description_
+        """
+        rotation_matrices = quaternion_to_matrix(self.quaternions)
+        # shape (n, 3, 1)
+        smallest_axis_idx = self.scaling.min(dim=-1)[1][..., None, None].expand(-1, 3, -1)
+        # get the column value of rotation matrix, the column idx is the smallest axis idx of scaling
+        # shape (n, 3, 1)
+        smallest_axis = rotation_matrices.gather(2, smallest_axis_idx)
+        if return_idx:
+            return smallest_axis.squeeze(dim=2), smallest_axis_idx[..., 0, 0]
+        return smallest_axis.squeeze(dim=2)
+
+    def get_normals(self, estimate_from_points=False, neighborhood_size: int = 32):
+        """Returns the normals of the Gaussians.
+
+        Args:
+            estimate_from_points (bool, optional): _description_. Defaults to False.
+            neighborhood_size (int, optional): _description_. Defaults to 32.
+
+        Returns:
+            _type_: _description_
+        """
+        if estimate_from_points:
+            normals = estimate_pointcloud_normals(
+                self.points[None],  # .detach(),
+                neighborhood_size=neighborhood_size,
+                disambiguate_directions=True
+            )[0]
+        else:
+            if self.binded_to_surface_mesh:
+                ## TODO mesh part wait to be fixed
+                normals = torch.nn.functional.normalize(self.surface_mesh.faces_normals_list()[0], dim=-1).view(-1, 1,
+                                                                                                                3)
+                normals = normals.expand(-1, self.n_gaussians_per_surface_triangle, -1).reshape(-1, 3)
+            else:
+                normals = self.get_smallest_axis()
+        return normals
+
+    # def get_cameras_spatial_extent(self, nerf_cameras: CamerasWrapper = None, return_average_xyz=False):
+    #     if nerf_cameras is None:
+    #         nerf_cameras = self.nerfmodel.training_cameras
+    #
+    #     camera_centers = nerf_cameras.p3d_cameras.get_camera_center()
+    #     avg_camera_center = camera_centers.mean(dim=0, keepdim=True)
+    #     half_diagonal = torch.norm(camera_centers - avg_camera_center, dim=-1).max().item()
+    #
+    #     radius = 1.1 * half_diagonal
+    #     if return_average_xyz:
+    #         return radius, avg_camera_center
+    #     else:
+    #         return radius
+
     def get_beta(self, x,
                  closest_gaussians_idx=None,
                  closest_gaussians_opacities=None,
@@ -407,3 +464,279 @@ class SuGaR():
 
         else:
             raise ValueError("Unknown beta_mode.")
+
+    def coarse_density_regulation(self, args):
+        # ====================Parameters==================== #
+        # num_device = args.gpu
+        detect_anomaly = False
+
+        # -----Data parameters-----
+        downscale_resolution_factor = 1  # 2, 4
+        # -----Model parameters-----
+        use_eval_split = True
+        n_skip_images_for_eval_split = 8
+
+        freeze_gaussians = False
+        initialize_from_trained_3dgs = True  # True or False
+        if initialize_from_trained_3dgs:
+            prune_at_start = False
+            start_pruning_threshold = 0.5
+        no_rendering = freeze_gaussians
+
+        n_points_at_start = None  # If None, takes all points in the SfM point cloud
+
+        learnable_positions = True  # True in 3DGS
+        use_same_scale_in_all_directions = False  # Should be False
+        sh_levels = 4
+
+        # -----Radiance Mesh-----
+        triangle_scale = 1.
+
+        # -----Rendering parameters-----
+        compute_color_in_rasterizer = False  # TODO: Try True
+
+        # -----Optimization parameters-----
+
+        # Learning rates and scheduling
+        num_iterations = 15_000  # Changed
+
+        spatial_lr_scale = None
+        position_lr_init = 0.00016
+        position_lr_final = 0.0000016
+        position_lr_delay_mult = 0.01
+        position_lr_max_steps = 30_000
+        feature_lr = 0.0025
+        opacity_lr = 0.05
+        scaling_lr = 0.005
+        rotation_lr = 0.001
+
+        # Densifier and pruning
+        heavy_densification = False
+        if initialize_from_trained_3dgs:
+            densify_from_iter = 500 + 99999  # 500  # Maybe reduce this, since we have a better initialization?
+            densify_until_iter = 7000 - 7000  # 7000
+        else:
+            densify_from_iter = 500  # 500  # Maybe reduce this, since we have a better initialization?
+            densify_until_iter = 7000  # 7000
+
+        if heavy_densification:
+            densification_interval = 50  # 100
+            opacity_reset_interval = 3000  # 3000
+
+            densify_grad_threshold = 0.0001  # 0.0002
+            densify_screen_size_threshold = 20
+            prune_opacity_threshold = 0.005
+            densification_percent_distinction = 0.01
+        else:
+            densification_interval = 100  # 100
+            opacity_reset_interval = 3000  # 3000
+
+            densify_grad_threshold = 0.0002  # 0.0002
+            densify_screen_size_threshold = 20
+            prune_opacity_threshold = 0.005
+            densification_percent_distinction = 0.01
+
+        # Data processing and batching
+        n_images_to_use_for_training = -1  # If -1, uses all images
+
+        train_num_images_per_batch = 1  # 1 for full images
+
+        # Loss functions
+        loss_function = 'l1+dssim'  # 'l1' or 'l2' or 'l1+dssim'
+        if loss_function == 'l1+dssim':
+            dssim_factor = 0.2
+
+        # Regularization
+        enforce_entropy_regularization = True
+        if enforce_entropy_regularization:
+            start_entropy_regularization_from = 7000
+            end_entropy_regularization_at = 9000  # TODO: Change
+            entropy_regularization_factor = 0.1
+
+        regularize_sdf = True
+        if regularize_sdf:
+            beta_mode = 'average'  # 'learnable', 'average' or 'weighted_average'
+
+            # start_sdf_regularization_from = 9000
+            start_sdf_regularization_from = 7000
+
+            regularize_sdf_only_for_gaussians_with_high_opacity = False
+            if regularize_sdf_only_for_gaussians_with_high_opacity:
+                sdf_regularization_opacity_threshold = 0.5
+
+            use_sdf_estimation_loss = True
+            enforce_samples_to_be_on_surface = False
+            if use_sdf_estimation_loss or enforce_samples_to_be_on_surface:
+                sdf_estimation_mode = 'density'  # 'sdf' or 'density'
+                # sdf_estimation_factor = 0.2  # 0.1 or 0.2?
+                samples_on_surface_factor = 0.2  # 0.05
+
+                squared_sdf_estimation_loss = False
+                squared_samples_on_surface_loss = False
+
+                normalize_by_sdf_std = False  # False
+
+                # start_sdf_estimation_from = 9000  # 7000
+                start_sdf_estimation_from = 7000
+
+                sample_only_in_gaussians_close_to_surface = True
+                close_gaussian_threshold = 2.  # 2.
+
+                use_projection_as_estimation = True
+                if use_projection_as_estimation:
+                    sample_only_in_gaussians_close_to_surface = False
+
+                backpropagate_gradients_through_depth = True  # True
+
+            use_sdf_better_normal_loss = True
+            if use_sdf_better_normal_loss:
+                # sdf_better_normal_factor = 0.2  # 0.1 or 0.2?
+                sdf_better_normal_gradient_through_normal_only = True
+
+            density_factor = 1. / 16.  # Should be equal to 1. / regularity_knn
+            if (use_sdf_estimation_loss or enforce_samples_to_be_on_surface) and sdf_estimation_mode == 'density':
+                density_factor = 1.
+            density_threshold = 1.  # 0.5 * density_factor
+            sdf_sampling_scale_factor = 1.5
+            sdf_sampling_proportional_to_volume = False
+
+        bind_to_surface_mesh = False
+        if bind_to_surface_mesh:
+            learn_surface_mesh_positions = True
+            learn_surface_mesh_opacity = True
+            learn_surface_mesh_scales = True
+            n_gaussians_per_surface_triangle = 6  # 1, 3, 4 or 6
+
+            use_surface_mesh_laplacian_smoothing_loss = True
+            if use_surface_mesh_laplacian_smoothing_loss:
+                surface_mesh_laplacian_smoothing_method = "uniform"  # "cotcurv", "cot", "uniform"
+                surface_mesh_laplacian_smoothing_factor = 5.  # 0.1
+
+            use_surface_mesh_normal_consistency_loss = True
+            if use_surface_mesh_normal_consistency_loss:
+                surface_mesh_normal_consistency_factor = 0.1  # 0.1
+
+            densify_from_iter = 999_999
+            densify_until_iter = 0
+            position_lr_init = 0.00016 * 0.01
+            position_lr_final = 0.0000016 * 0.01
+            scaling_lr = 0.005
+        else:
+            surface_mesh_to_bind_path = None
+
+        if regularize_sdf:
+            regularize = True
+            regularity_knn = 16  # 8 until now
+            # regularity_knn = 8
+            regularity_samples = -1  # Retry with 1000, 10000
+            reset_neighbors_every = 500  # 500 until now
+            regularize_from = 7000  # 0 until now
+            start_reset_neighbors_from = 7000 + 1  # 0 until now (should be equal to regularize_from + 1?)
+            prune_when_starting_regularization = False
+        else:
+            regularize = False
+            regularity_knn = 0
+        if bind_to_surface_mesh:
+            regularize = False
+            regularity_knn = 0
+
+        # Opacity management
+        prune_low_opacity_gaussians_at = [9000]
+        if bind_to_surface_mesh:
+            prune_low_opacity_gaussians_at = [999_999]
+        prune_hard_opacity_threshold = 0.5
+
+        # Warmup
+        do_resolution_warmup = False
+        if do_resolution_warmup:
+            resolution_warmup_every = 500
+            current_resolution_factor = downscale_resolution_factor * 4.
+        else:
+            current_resolution_factor = downscale_resolution_factor
+
+        do_sh_warmup = True  # Should be True
+        if initialize_from_trained_3dgs:
+            do_sh_warmup = False
+            sh_levels = 4  # nerfmodel.gaussians.active_sh_degree + 1
+        if do_sh_warmup:
+            sh_warmup_every = 1000
+            current_sh_levels = 1
+        else:
+            current_sh_levels = sh_levels
+
+        # -----Log and save-----
+        print_loss_every_n_iterations = 50
+        save_model_every_n_iterations = 1_000_000
+        save_milestones = [9000, 12_000, 15_000]
+
+        # new
+        current_step = args.current_step
+        batch_radii = args.outputs['radii']
+        reset_neighbors_every = args.reset_neighbors_every
+        n_samples_for_sdf_regularization = args.n_samples_for_sdf_regularization
+        start_sdf_better_normal_from = args.start_sdf_better_normal_from
+        # ====================Parameters==================== #
+
+        # ====================Regulation loss==================== #
+        batch_size = len(batch_radii)
+        loss = {"density_regulation": 0, "sdf_better_normal_loss": 0}
+        for radii in batch_radii:
+            visibility_filter = radii > 0
+            if current_step % reset_neighbors_every == 0:
+                self.reset_neighbors()
+
+            sampling_mask = visibility_filter
+            n_gaussians_in_sampling = sampling_mask.sum()
+            if n_gaussians_in_sampling > 0:
+                sdf_samples, sdf_gaussian_idx = self.sample_points_in_gaussians(
+                    num_samples=n_samples_for_sdf_regularization,
+                    sampling_scale_factor=sdf_sampling_scale_factor,
+                    mask=sampling_mask,
+                    probabilities_proportional_to_volume=sdf_sampling_proportional_to_volume,
+                )
+
+                fields = self.get_field_values(
+                    sdf_samples, sdf_gaussian_idx,
+                    return_sdf=False,
+                    density_threshold=density_threshold,
+                    density_factor=density_factor,
+                    return_sdf_grad=False,
+                    sdf_grad_max_value=10.,
+                    return_closest_gaussian_opacities=use_sdf_better_normal_loss and current_step > start_sdf_better_normal_from,
+                    return_beta=True)
+
+                # Compute the depth of the points in the gaussians
+                proj_mask = torch.ones_like(sdf_samples[..., 0], dtype=torch.bool)
+                samples_gaussian_normals = self.get_normals(estimate_from_points=False)[
+                    sdf_gaussian_idx]
+                sdf_estimation = ((sdf_samples - self.points[
+                    sdf_gaussian_idx]) * samples_gaussian_normals).sum(
+                    dim=-1)  # Shape is (n_samples,)
+
+                # Compute sdf estimation loss
+                beta = fields['beta'][proj_mask]
+                densities = fields['density'][proj_mask]
+                target_densities = torch.exp(-0.5 * sdf_estimation.pow(2) / beta.pow(2))
+                if squared_sdf_estimation_loss:
+                    sdf_estimation_loss = ((densities - target_densities)).pow(2)
+                else:
+                    sdf_estimation_loss = (densities - target_densities).abs()
+                loss["density_regulation"] += sdf_estimation_loss.mean()
+
+                # # Compute sdf better normal loss
+                # closest_gaussians_idx = self.knn_idx[sdf_gaussian_idx]
+                # # Compute minimum scaling
+                # closest_min_scaling = self.scaling.min(dim=-1)[0][closest_gaussians_idx].detach().view(len(sdf_samples), -1)
+                # # Compute normals and flip their sign if needed
+                # gaussians_normals = self.get_normals(estimate_from_points=False)
+                # closest_gaussian_normals = gaussians_normals[closest_gaussians_idx]
+                # samples_gaussian_normals = gaussians_normals[sdf_gaussian_idx]
+                # closest_gaussian_normals = closest_gaussian_normals * torch.sign(
+                #     (closest_gaussian_normals * samples_gaussian_normals[:, None]).sum(dim=-1, keepdim=True)).detach()
+                # # Compute weights for normal regularization, based on the gradient of the sdf
+                # closest_gaussian_opacities = fields['closest_gaussian_opacities'].detach()
+
+        for k, v in loss.items():
+            loss[k] = v / batch_size
+        # ====================Regulation loss==================== #
+        return loss
