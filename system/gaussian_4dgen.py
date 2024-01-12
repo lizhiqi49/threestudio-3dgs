@@ -58,7 +58,6 @@ class Gaussian4DGen(BaseLift3DSystem):
         super().configure()
         self.automatic_optimization = False
         self.stage = self.cfg.stage
-        self.sugar = SuGaR(self.geometry.get_xyz)
 
     def configure_optimizers(self):
         optim = self.geometry.optimizer
@@ -246,10 +245,33 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         ## density regulation loss
         if self.C(self.cfg.loss.lambda_density_regulation, "interval") > 0:
-            sampling_mask = visibility_filter
+
             current_step = self.true_global_step
+
             if current_step % self.cfg.sugar.reset_neighbors_every == 0:
                 self.sugar.reset_neighbors()
+
+            sampling_mask = visibility_filter
+            n_gaussians_in_sampling = sampling_mask.sum()
+            if n_gaussians_in_sampling > 0:
+                sdf_samples, sdf_gaussian_idx = self.sugar.sample_points_in_gaussians(
+                    num_samples=self.cfg.sugar.n_samples_for_sdf_regularization,
+                    sampling_scale_factor=self.cfg.sugar.sdf_sampling_scale_factor,
+                    mask=sampling_mask[0],
+                    probabilities_proportional_to_volume=self.cfg.sugar.sdf_sampling_proportional_to_volume,
+                )
+
+                if self.cfg.sugar.use_sdf_estimation_loss or self.cfg.sugar.use_sdf_better_normal_loss:
+                    fields = self.sugar.get_field_values(
+                        sdf_samples, sdf_gaussian_idx,
+                        return_sdf=(self.cfg.sugar.use_sdf_estimation_loss or self.cfg.sugar.enforce_samples_to_be_on_surface) and (
+                            self.cfg.sugar.sdf_estimation_mode == 'sdf') and current_step > self.cfg.sugar.start_sdf_estimation_from,
+                        density_threshold=self.cfg.sugar.density_threshold, density_factor=self.cfg.sugar.density_factor,
+                        return_sdf_grad=False, sdf_grad_max_value=10.,
+                        return_closest_gaussian_opacities=self.cfg.sugar.use_sdf_better_normal_loss and current_step > self.cfg.sugar.start_sdf_better_normal_from,
+                        return_beta=(self.cfg.sugar.use_sdf_estimation_loss or self.cfg.sugar.enforce_samples_to_be_on_surface) and (
+                            self.cfg.sugar.sdf_estimation_mode == 'density') and current_step > self.cfg.sugar.start_sdf_estimation_from,
+                    )
 
 
         loss = 0.0
@@ -272,6 +294,10 @@ class Gaussian4DGen(BaseLift3DSystem):
 
     def training_step(self, batch, batch_idx):
         opt = self.optimizers()
+
+        if self.true_global_step == self.cfg.sugar.start_regularization_from:
+            self.sugar = SuGaR(self.geometry,
+                               keep_track_of_knn=True)
 
         total_loss = 0.0
 

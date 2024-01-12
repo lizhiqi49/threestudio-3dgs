@@ -75,17 +75,17 @@ def gaussian_3d_coeff(xyzs, covs):
 
     # eps must be small enough !!!
     inv_det = 1 / (
-        a * d * f + 2 * e * c * b - e**2 * a - c**2 * d - b**2 * f + 1e-24
+        a * d * f + 2 * e * c * b - e ** 2 * a - c ** 2 * d - b ** 2 * f + 1e-24
     )
-    inv_a = (d * f - e**2) * inv_det
+    inv_a = (d * f - e ** 2) * inv_det
     inv_b = (e * c - b * f) * inv_det
     inv_c = (e * b - c * d) * inv_det
-    inv_d = (a * f - c**2) * inv_det
+    inv_d = (a * f - c ** 2) * inv_det
     inv_e = (b * c - e * a) * inv_det
-    inv_f = (a * d - b**2) * inv_det
+    inv_f = (a * d - b ** 2) * inv_det
 
     power = (
-        -0.5 * (x**2 * inv_a + y**2 * inv_d + z**2 * inv_f)
+        -0.5 * (x ** 2 * inv_a + y ** 2 * inv_d + z ** 2 * inv_f)
         - x * y * inv_b
         - x * z * inv_c
         - y * z * inv_e
@@ -263,7 +263,7 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             shap_e_guidance = threestudio.find("shap-e-guidance")(
                 self.cfg.shap_e_guidance_config
             )
-            prompt = self.cfg.geometry_convert_from[len("shap-e:") :]
+            prompt = self.cfg.geometry_convert_from[len("shap-e:"):]
             xyz, color = shap_e_guidance(prompt)
 
             pcd = BasicPointCloud(
@@ -277,7 +277,7 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             lrm_guidance = threestudio.find("lrm-guidance")(
                 self.cfg.shap_e_guidance_config
             )
-            prompt = self.cfg.geometry_convert_from[len("lrm:") :]
+            prompt = self.cfg.geometry_convert_from[len("lrm:"):]
             xyz, color = lrm_guidance(prompt)
 
             pcd = BasicPointCloud(
@@ -364,9 +364,17 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             )
         return self.scaling_activation(self._scaling)
 
+    def set_scaling(self, scaling):
+        assert self._scaling.shape == scaling.shape
+        self._scaling.data.copy_(scaling)
+
     @property
     def get_rotation(self):
         return self.rotation_activation(self._rotation)
+
+    def set_rotation(self, rotation):
+        assert self._rotation.shape == rotation.shape
+        self._rotation.data.copy_(rotation)
 
     @property
     def get_xyz(self):

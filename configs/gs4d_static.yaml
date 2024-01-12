@@ -138,6 +138,19 @@ system:
 
   sugar:
     reset_neighbors_every: 500
+    start_regularization_from: 0
+    n_samples_for_sdf_regularization: 5000 # 1000000
+    sdf_sampling_scale_factor: 1.5
+    sdf_sampling_proportional_to_volume: false
+    use_sdf_estimation_loss: true
+    use_sdf_better_normal_loss: true
+    enforce_samples_to_be_on_surface: false
+    sdf_estimation_mode: "density"
+    density_threshold: 1.
+    density_factor: 1.
+    start_sdf_better_normal_from: 0 # 9000
+    start_sdf_estimation_from: 0 # 9000
+
 
 trainer:
   max_steps: 5000
@@ -146,6 +159,7 @@ trainer:
   val_check_interval: 100
   enable_progress_bar: true
   precision: 32
+
 
 checkpoint:
   save_last: true # save at each validation time
