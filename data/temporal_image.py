@@ -34,6 +34,7 @@ class TemporalRandomImageDataModuleConfig(SingleImageDataModuleConfig):
     num_frames: int = 14
     video_frames_dir: Optional[str] = None 
     norm_timestamp: bool = False
+    white_background: bool = True
 
 class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
     def __init__(self, cfg: Any, split: str) -> None:
@@ -157,10 +158,12 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         rgb: Float[Tensor, "1 H W 3"] = (
             torch.from_numpy(rgb).unsqueeze(0).contiguous().to(self.rank)
         )
-        self.rgbs.append(rgb)
         mask: Float[Tensor, "1 H W 1"] = (
             torch.from_numpy(rgba[..., 3:] > 0.5).unsqueeze(0).to(self.rank)
         )
+        if self.cfg.white_background:
+            rgb[~mask[..., 0], :] = 1.0
+        self.rgbs.append(rgb)
         self.masks.append(mask)
         print(
             f"[INFO] single image dataset: load image {frame_path} {rgb.shape}"

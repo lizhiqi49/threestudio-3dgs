@@ -71,6 +71,9 @@ system:
     trbfc_lr: 0.0001
     trbfs_lr: 0.03
     move_lr: 3.5
+
+    rank_motion: 2
+    rank_rotation: 1
     
     addsphpointsscale: 0.8
     trbfslinit: 0.0
