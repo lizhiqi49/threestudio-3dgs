@@ -283,6 +283,11 @@ class Gaussian4DGen(BaseLift3DSystem):
         opt.zero_grad(set_to_none=True)
 
         return {"loss": total_loss}
+    
+    def on_validation_epoch_start(self) -> None:
+        if self.geometry.cfg.use_spline:
+            self.geometry.compute_control_knots()
+            self.geometry.spliner.update_end_time()
 
     def validation_step(self, batch, batch_idx):
         if self.stage != "static" and not batch.__contains__("timestamp"):
@@ -399,6 +404,11 @@ class Gaussian4DGen(BaseLift3DSystem):
                 name="validation_epoch_end-ref",
                 step=self.true_global_step,
             )
+            
+    def on_test_epoch_start(self) -> None:
+        if self.geometry.cfg.use_spline:
+            self.geometry.compute_control_knots()
+            self.geometry.spliner.update_end_time()
 
     def test_step(self, batch, batch_idx):
         if self.stage != "static" and not batch.__contains__("timestamp"):
