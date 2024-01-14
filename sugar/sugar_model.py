@@ -681,7 +681,7 @@ class SuGaR():
 
         # ====================Regulation loss==================== #
         batch_size = len(batch_visibility_filter)
-        loss = {"density_regulation": 0, "sdf_better_normal_loss": 0}
+        loss = {"density_regulation": 0, "normal_regulation": 0}
 
         for batch_idx in range(batch_size):
             visibility_filter = batch_visibility_filter[batch_idx]
@@ -723,18 +723,38 @@ class SuGaR():
                     sdf_estimation_loss = (densities - target_densities).abs()
                 loss["density_regulation"] += sdf_estimation_loss.mean()
 
-                # # Compute sdf better normal loss
-                # closest_gaussians_idx = self.knn_idx[sdf_gaussian_idx]
-                # # Compute minimum scaling
-                # closest_min_scaling = self.scaling.min(dim=-1)[0][closest_gaussians_idx].detach().view(len(sdf_samples), -1)
-                # # Compute normals and flip their sign if needed
-                # gaussians_normals = self.get_normals(estimate_from_points=False)
-                # closest_gaussian_normals = gaussians_normals[closest_gaussians_idx]
-                # samples_gaussian_normals = gaussians_normals[sdf_gaussian_idx]
-                # closest_gaussian_normals = closest_gaussian_normals * torch.sign(
-                #     (closest_gaussian_normals * samples_gaussian_normals[:, None]).sum(dim=-1, keepdim=True)).detach()
-                # # Compute weights for normal regularization, based on the gradient of the sdf
-                # closest_gaussian_opacities = fields['closest_gaussian_opacities'].detach()
+                # Compute sdf better normal loss
+                if use_sdf_better_normal_loss and (current_step > start_sdf_better_normal_from):
+                    closest_gaussians_idx = self.knn_idx[sdf_gaussian_idx]
+                    closest_min_scaling = self.scaling.min(dim=-1)[0][closest_gaussians_idx].detach().view(len(sdf_samples), -1)
+
+                    # Compute normals and flip their sign if needed
+                    gaussians_normals = self.get_normals(estimate_from_points=False)
+                    closest_gaussian_normals = gaussians_normals[closest_gaussians_idx]
+                    samples_gaussian_normals = gaussians_normals[sdf_gaussian_idx]
+                    closest_gaussian_normals = closest_gaussian_normals * torch.sign(
+                        (closest_gaussian_normals * samples_gaussian_normals[:, None]).sum(dim=-1, keepdim=True)).detach()
+
+                    # Compute weights for normal regularization, based on the gradient of the sdf
+                    closest_gaussian_opacities = fields['closest_gaussian_opacities'].detach()
+                    normal_weights = ((sdf_samples[:, None] - self.points[
+                        closest_gaussians_idx]) * closest_gaussian_normals).sum(
+                        dim=-1).abs()  # Shape is (n_samples, n_neighbors)
+                    if sdf_better_normal_gradient_through_normal_only:
+                        normal_weights = normal_weights.detach()
+                    normal_weights = closest_gaussian_opacities * normal_weights / closest_min_scaling.clamp(
+                        min=1e-6) ** 2  # Shape is (n_samples, n_neighbors)
+
+                    # The weights should have a sum of 1 because of the eikonal constraint
+                    normal_weights_sum = normal_weights.sum(dim=-1).detach()  # Shape is (n_samples,)
+                    normal_weights = normal_weights / normal_weights_sum.unsqueeze(-1).clamp(
+                        min=1e-6)  # Shape is (n_samples, n_neighbors)
+
+                    # Compute regularization loss
+                    sdf_better_normal_loss = (samples_gaussian_normals - (
+                        normal_weights[..., None] * closest_gaussian_normals).sum(dim=-2)
+                                              ).pow(2).sum(dim=-1)  # Shape is (n_samples,)
+                    loss['normal_regulation'] += sdf_better_normal_loss.mean()
 
         for k, v in loss.items():
             loss[k] = v / batch_size
