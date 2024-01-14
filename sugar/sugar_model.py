@@ -288,9 +288,12 @@ class SuGaR():
             -1. / 2 * neighbor_opacities)
         densities = neighbor_opacities.sum(dim=-1)
         fields['density'] = densities.clone()
-        density_mask = densities >= 1.
+
         # normalize density bigger or equal than 1
+        density_mask = densities >= 1.
         densities[density_mask] = densities[density_mask] / (densities[density_mask].detach() + 1e-12)
+
+
 
         if return_closest_gaussian_opacities:
             fields['closest_gaussian_opacities'] = neighbor_opacities
@@ -671,20 +674,17 @@ class SuGaR():
 
         # new
         current_step = args.current_step
-        batch_radii = args.outputs['radii']
-        reset_neighbors_every = args.reset_neighbors_every
+        batch_visibility_filter = args.outputs['visibility_filter']
         n_samples_for_sdf_regularization = args.n_samples_for_sdf_regularization
         start_sdf_better_normal_from = args.start_sdf_better_normal_from
         # ====================Parameters==================== #
 
         # ====================Regulation loss==================== #
-        batch_size = len(batch_radii)
+        batch_size = len(batch_visibility_filter)
         loss = {"density_regulation": 0, "sdf_better_normal_loss": 0}
-        for radii in batch_radii:
-            visibility_filter = radii > 0
-            if current_step % reset_neighbors_every == 0:
-                self.reset_neighbors()
 
+        for batch_idx in range(batch_size):
+            visibility_filter = batch_visibility_filter[batch_idx]
             sampling_mask = visibility_filter
             n_gaussians_in_sampling = sampling_mask.sum()
             if n_gaussians_in_sampling > 0:

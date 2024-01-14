@@ -231,10 +231,9 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         ## cross entropy loss for opacity to make it binary
         if self.C(self.cfg.loss.lambda_opacity_binary, "interval") > 0:
-            radii = out["radii"]
-            opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(radii), 1, 1)
-            visibility_filter = torch.stack(radii) > 0
-            vis_opacities = opacity[visibility_filter]
+            visibility_filter = out["visibility_filter"]
+            opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(visibility_filter), 1, 1)
+            vis_opacities = opacity[torch.stack(visibility_filter)]
             set_loss(
                 "opacity_binary",
                 -(vis_opacities * torch.log(vis_opacities + 1e-10)
@@ -246,7 +245,6 @@ class Gaussian4DGen(BaseLift3DSystem):
             coarse_args = EasyDict(
                 {"current_step": self.true_global_step,
                  "outputs": out,
-                 "reset_neighbors_every": self.cfg.sugar.reset_neighbors_every,
                  "n_samples_for_sdf_regularization": self.cfg.sugar.n_samples_for_sdf_regularization,
                  "start_sdf_better_normal_from": self.cfg.sugar.start_sdf_better_normal_from
                  })
@@ -277,8 +275,14 @@ class Gaussian4DGen(BaseLift3DSystem):
     def training_step(self, batch, batch_idx):
         opt = self.optimizers()
 
-        if self.true_global_step == self.cfg.sugar.start_regularization_from:
+        if self.global_step == self.cfg.sugar.start_regularization_from:
             self.sugar = SuGaR(self.geometry, keep_track_of_knn=True)
+        elif self.global_step > self.cfg.sugar.start_regularization_from:
+            assert hasattr(self.geometry, "densified")
+            # reset neighbors after gaussians densified or settings
+            if self.geometry.densified or self.global_step % self.cfg.sugar.reset_neighbors_every == 0:
+                self.geometry.densified = False
+                self.sugar.reset_neighbors()
 
         total_loss = 0.0
 

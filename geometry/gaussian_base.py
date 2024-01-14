@@ -243,6 +243,8 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
 
     def configure(self) -> None:
         super().configure()
+        self.densified = False
+
         self.active_sh_degree = 0
         self.max_sh_degree = self.cfg.sh_degree
         self._xyz = torch.empty(0)
@@ -844,4 +846,5 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             and iteration < self.cfg.densify_until_iter
             and iteration % self.cfg.densification_interval == 0
         ):
+            self.densified = True
             self.densify(self.cfg.densify_grad_threshold)
