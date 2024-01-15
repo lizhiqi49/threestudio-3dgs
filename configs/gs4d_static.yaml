@@ -62,13 +62,13 @@ system:
     min_opac_prune: 0.005
     split_thresh: 0.02
     radii2d_thresh: 1000
-
     sphere: False
-
     init_num_pts: 4096
     pc_init_radius: 0.5
     opacity_init: 0.05
     max_num: 500000
+    sugar_prune_at: ${system.sugar.prune_low_opacity_gaussians_at}
+    sugar_prune_threshold: ${system.sugar.prune_hard_opacity_threshold}
 
   exporter_type: "gaussian-mesh-exporter"
 
@@ -123,8 +123,9 @@ system:
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
-    lambda_opacity_binary: [0, 0.1, 0.1, 1500]
-    lambda_density_regulation: [100, 1., 1., 2500]
+    lambda_opacity_binary: [100, 0.1, 0.1, 200]
+    lambda_density_regulation: [200, 1., 1., 500]
+    lambda_normal_regulation: [200, 1., 1., 500]
 
   optimizer:
     name: Adam
@@ -138,9 +139,13 @@ system:
 
   sugar:
     reset_neighbors_every: 100
-    start_regularization_from: 100 # consistent with lambda_density_regulation
+    start_regularization_from: 200 # consistent with lambda_density_regulation
     n_samples_for_sdf_regularization: 200000
-    start_sdf_better_normal_from: 3000
+    start_sdf_better_normal_from: 200
+    use_sdf_better_normal_loss: true
+    prune_hard_opacity_threshold: 0.5
+    prune_low_opacity_gaussians_at: 200 # consistent with lambda opacity binary
+
 #    sdf_sampling_scale_factor: 1.5
 #    sdf_sampling_proportional_to_volume: false
 #    use_sdf_estimation_loss: true

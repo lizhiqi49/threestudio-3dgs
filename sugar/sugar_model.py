@@ -378,20 +378,6 @@ class SuGaR():
                 normals = self.get_smallest_axis()
         return normals
 
-    # def get_cameras_spatial_extent(self, nerf_cameras: CamerasWrapper = None, return_average_xyz=False):
-    #     if nerf_cameras is None:
-    #         nerf_cameras = self.nerfmodel.training_cameras
-    #
-    #     camera_centers = nerf_cameras.p3d_cameras.get_camera_center()
-    #     avg_camera_center = camera_centers.mean(dim=0, keepdim=True)
-    #     half_diagonal = torch.norm(camera_centers - avg_camera_center, dim=-1).max().item()
-    #
-    #     radius = 1.1 * half_diagonal
-    #     if return_average_xyz:
-    #         return radius, avg_camera_center
-    #     else:
-    #         return radius
-
     def get_beta(self, x,
                  closest_gaussians_idx=None,
                  closest_gaussians_opacities=None,
@@ -591,11 +577,6 @@ class SuGaR():
 
                 backpropagate_gradients_through_depth = True  # True
 
-            use_sdf_better_normal_loss = True
-            if use_sdf_better_normal_loss:
-                # sdf_better_normal_factor = 0.2  # 0.1 or 0.2?
-                sdf_better_normal_gradient_through_normal_only = True
-
             density_factor = 1. / 16.  # Should be equal to 1. / regularity_knn
             if (use_sdf_estimation_loss or enforce_samples_to_be_on_surface) and sdf_estimation_mode == 'density':
                 density_factor = 1.
@@ -677,6 +658,8 @@ class SuGaR():
         batch_visibility_filter = args.outputs['visibility_filter']
         n_samples_for_sdf_regularization = args.n_samples_for_sdf_regularization
         start_sdf_better_normal_from = args.start_sdf_better_normal_from
+        use_sdf_better_normal_loss = args.use_sdf_better_normal_loss
+        sdf_better_normal_gradient_through_normal_only = use_sdf_better_normal_loss
         # ====================Parameters==================== #
 
         # ====================Regulation loss==================== #
@@ -702,7 +685,7 @@ class SuGaR():
                     density_factor=density_factor,
                     return_sdf_grad=False,
                     sdf_grad_max_value=10.,
-                    return_closest_gaussian_opacities=use_sdf_better_normal_loss and current_step > start_sdf_better_normal_from,
+                    return_closest_gaussian_opacities=use_sdf_better_normal_loss and current_step >= start_sdf_better_normal_from,
                     return_beta=True)
 
                 # Compute the depth of the points in the gaussians
@@ -724,7 +707,7 @@ class SuGaR():
                 loss["density_regulation"] += sdf_estimation_loss.mean()
 
                 # Compute sdf better normal loss
-                if use_sdf_better_normal_loss and (current_step > start_sdf_better_normal_from):
+                if use_sdf_better_normal_loss and (current_step >= start_sdf_better_normal_from):
                     closest_gaussians_idx = self.knn_idx[sdf_gaussian_idx]
                     closest_min_scaling = self.scaling.min(dim=-1)[0][closest_gaussians_idx].detach().view(len(sdf_samples), -1)
 

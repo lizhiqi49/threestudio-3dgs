@@ -246,13 +246,12 @@ class Gaussian4DGen(BaseLift3DSystem):
                 {"current_step": self.true_global_step,
                  "outputs": out,
                  "n_samples_for_sdf_regularization": self.cfg.sugar.n_samples_for_sdf_regularization,
-                 "start_sdf_better_normal_from": self.cfg.sugar.start_sdf_better_normal_from
+                 "use_sdf_better_normal_loss": self.cfg.sugar.use_sdf_better_normal_loss,
+                 "start_sdf_better_normal_from": self.cfg.sugar.start_sdf_better_normal_from,
                  })
             dloss = self.sugar.coarse_density_regulation(coarse_args)
-            set_loss(
-                "density_regulation",
-                dloss['density_regulation']
-            )
+            set_loss("density_regulation", dloss['density_regulation'])
+            set_loss("normal_regulation", dloss['normal_regulation'])
 
         loss = 0.0
         for name, value in loss_terms.items():
@@ -275,14 +274,15 @@ class Gaussian4DGen(BaseLift3DSystem):
     def training_step(self, batch, batch_idx):
         opt = self.optimizers()
 
-        if self.global_step == self.cfg.sugar.start_regularization_from:
-            self.sugar = SuGaR(self.geometry, keep_track_of_knn=True)
-        elif self.global_step > self.cfg.sugar.start_regularization_from:
-            assert hasattr(self.geometry, "densified")
-            # reset neighbors after gaussians densified or settings
-            if self.geometry.densified or self.global_step % self.cfg.sugar.reset_neighbors_every == 0:
-                self.geometry.densified = False
-                self.sugar.reset_neighbors()
+        if self.cfg.sugar.start_regularization_from is not None:
+            if self.global_step == self.cfg.sugar.start_regularization_from:
+                self.sugar = SuGaR(self.geometry, keep_track_of_knn=True)
+            elif self.global_step > self.cfg.sugar.start_regularization_from:
+                assert hasattr(self.geometry, "pruned_or_densified")
+                # reset neighbors after gaussians densified or settings
+                if self.geometry.pruned_or_densified or self.global_step % self.cfg.sugar.reset_neighbors_every == 0:
+                    self.geometry.pruned_or_densified = False
+                    self.sugar.reset_neighbors()
 
         total_loss = 0.0
 
@@ -550,59 +550,3 @@ class Gaussian4DGen(BaseLift3DSystem):
             )
         plysavepath = os.path.join(self.get_save_dir(), f"point_cloud_it{self.true_global_step}.ply")
         self.geometry.save_ply(plysavepath)
-
-    # current_step = self.true_global_step
-    #
-    # if current_step % self.cfg.sugar.reset_neighbors_every == 0:
-    #     self.sugar.reset_neighbors()
-    #
-    # sampling_mask = visibility_filter
-    # n_gaussians_in_sampling = sampling_mask.sum()
-    # if n_gaussians_in_sampling > 0:
-    #     sdf_samples, sdf_gaussian_idx = self.sugar.sample_points_in_gaussians(
-    #         num_samples=self.cfg.sugar.n_samples_for_sdf_regularization,
-    #         sampling_scale_factor=self.cfg.sugar.sdf_sampling_scale_factor,
-    #         mask=sampling_mask[0],
-    #         probabilities_proportional_to_volume=self.cfg.sugar.sdf_sampling_proportional_to_volume,
-    #     )
-    #
-    #     if self.cfg.sugar.use_sdf_estimation_loss or self.cfg.sugar.use_sdf_better_normal_loss:
-    #         fields = self.sugar.get_field_values(
-    #             sdf_samples, sdf_gaussian_idx,
-    #             return_sdf=(self.cfg.sugar.use_sdf_estimation_loss or self.cfg.sugar.enforce_samples_to_be_on_surface) and (
-    #                 self.cfg.sugar.sdf_estimation_mode == 'sdf') and current_step > self.cfg.sugar.start_sdf_estimation_from,
-    #             density_threshold=self.cfg.sugar.density_threshold, density_factor=self.cfg.sugar.density_factor,
-    #             return_sdf_grad=False, sdf_grad_max_value=10.,
-    #             return_closest_gaussian_opacities=self.cfg.sugar.use_sdf_better_normal_loss and current_step > self.cfg.sugar.start_sdf_better_normal_from,
-    #             return_beta=(self.cfg.sugar.use_sdf_estimation_loss or self.cfg.sugar.enforce_samples_to_be_on_surface) and (
-    #                 self.cfg.sugar.sdf_estimation_mode == 'density') and current_step > self.cfg.sugar.start_sdf_estimation_from,
-    #         )
-    #
-    #     if ((self.cfg.sugar.use_sdf_estimation_loss or self.cfg.sugar.enforce_samples_to_be_on_surface)
-    #         and current_step > self.cfg.sugar.start_sdf_estimation_from):
-    #         # Compute the depth of the points in the gaussians
-    #         if self.cfg.sugar.use_projection_as_estimation:
-    #             proj_mask = torch.ones_like(sdf_samples[..., 0], dtype=torch.bool)
-    #             samples_gaussian_normals = self.sugar.get_normals(estimate_from_points=False)[
-    #                 sdf_gaussian_idx]
-    #             # why needn't normalize the samples_gaussian_normals ?
-    #             sdf_estimation = ((sdf_samples - self.sugar.points[
-    #                 sdf_gaussian_idx]) * samples_gaussian_normals).sum(
-    #                 dim=-1)  # Shape is (n_samples,)
-    #         else:
-    #             raise ValueError("wait to finish")
-    #
-    #         if self.cfg.sugar.use_sdf_estimation_loss:
-    #             if self.cfg.sugar.sdf_estimation_mode == 'sdf':
-    #                 raise ValueError("wait to finish")
-    #             elif self.cfg.sugar.sdf_estimation_mode == 'density':
-    #                 beta = fields['beta'][proj_mask]
-    #                 densities = fields['density'][proj_mask]
-    #                 target_densities = torch.exp(-0.5 * sdf_estimation.pow(2) / beta.pow(2))
-    #                 if self.cfg.sugar.squared_sdf_estimation_loss:
-    #                     sdf_estimation_loss = ((densities - target_densities)).pow(2)
-    #                 else:
-    #                     sdf_estimation_loss = (densities - target_densities).abs()
-    #             else:
-    #                 raise ValueError(f"Unknown sdf_estimation_mode: {self.cfg.sugar.sdf_estimation_mode}")
-
