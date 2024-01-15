@@ -123,9 +123,9 @@ system:
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
-    lambda_opacity_binary: [100, 0.1, 0.1, 200]
-    lambda_density_regulation: [200, 1., 1., 500]
-    lambda_normal_regulation: [200, 1., 1., 500]
+    lambda_opacity_binary: 0. # [100, 0.1, 0.1, 200]
+    lambda_density_regulation: 0. # [200, 1., 1., 500]
+    lambda_normal_regulation: 0. # [200, 1., 1., 500]
 
   optimizer:
     name: Adam
@@ -139,12 +139,12 @@ system:
 
   sugar:
     reset_neighbors_every: 100
-    start_regularization_from: 200 # consistent with lambda_density_regulation
+    start_regularization_from: null # consistent with lambda_density_regulation
     n_samples_for_sdf_regularization: 200000
     start_sdf_better_normal_from: 200
     use_sdf_better_normal_loss: true
     prune_hard_opacity_threshold: 0.5
-    prune_low_opacity_gaussians_at: 200 # consistent with lambda opacity binary
+    prune_low_opacity_gaussians_at: null # consistent with lambda opacity binary
 
 #    sdf_sampling_scale_factor: 1.5
 #    sdf_sampling_proportional_to_volume: false
