@@ -1,4 +1,4 @@
-name: "gs4d-motion"
+name: "gs4d-spline"
 tag: "${data.random_camera.height}_${rmspace:${basename:${data.video_frames_dir}},_}"
 exp_root_dir: "outputs"
 seed: 0
