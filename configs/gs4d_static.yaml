@@ -55,9 +55,9 @@ system:
     prune_interval: 100
     opacity_reset_interval: 100000
     densify_from_iter: 0
-    densify_until_iter: ${trainer.max_steps}
+    densify_until_iter: 1000
     prune_from_iter: 0
-    prune_until_iter: ${trainer.max_steps}
+    prune_until_iter: 1000
     densify_grad_threshold: 0.01
     min_opac_prune: 0.005
     split_thresh: 0.02
@@ -123,9 +123,9 @@ system:
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
-    lambda_opacity_binary: 0. # [100, 0.1, 0.1, 200]
-    lambda_density_regulation: 0. # [200, 1., 1., 500]
-    lambda_normal_regulation: 0. # [200, 1., 1., 500]
+    lambda_opacity_binary: [1000, 0.1, 0.1, 1500]
+    lambda_density_regulation: [1500, 0.2, 0.2, 2500]
+    lambda_normal_regulation: [1500, 0.2, 0.2, 2500]
 
   optimizer:
     name: Adam
@@ -139,12 +139,12 @@ system:
 
   sugar:
     reset_neighbors_every: 100
-    start_regularization_from: null # consistent with lambda_density_regulation
-    n_samples_for_sdf_regularization: 200000
-    start_sdf_better_normal_from: 200
+    start_regularization_from: 1500 # consistent with lambda_density_regulation
+    n_samples_for_sdf_regularization: 500000
+    start_sdf_better_normal_from: 1500 # consistent with lambda_normal_regulation
     use_sdf_better_normal_loss: true
     prune_hard_opacity_threshold: 0.5
-    prune_low_opacity_gaussians_at: null # consistent with lambda opacity binary
+    prune_low_opacity_gaussians_at: 1500 # consistent with lambda opacity binary end
 
 #    sdf_sampling_scale_factor: 1.5
 #    sdf_sampling_proportional_to_volume: false
