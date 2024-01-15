@@ -36,6 +36,9 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         trbfc_lr: float = 0.01
         trbfs_lr: float = 0.01
         move_lr: float = 0.01
+
+        rank_motion: int = 3
+        rank_omega: int = 1
         
         addsphpointsscale: float = 0.8
         trbfslinit: float = 0.1
@@ -196,16 +199,26 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             self.create_from_pcd(pcd, 10)
             self.training_setup()
     
+    
     def get_motion(self, delta_t):
         if self.cfg.enable_spacetime:
-            motion = (
-                self._motion[:, 0:3] * delta_t 
-                + self._motion[:, 3:6] * delta_t * delta_t
-                + self._motion[:, 6:9] * delta_t * delta_t * delta_t
-            )
+            motion_ = self._motion.reshape(-1, self.cfg.rank_motion, 3)
+            motion = torch.zeros(self._xyz.shape, dtype=self._xyz.dtype, device=self.device)
+            for i in range(self.cfg.rank_motion):
+                motion += motion_[:, i, :] * delta_t ** (i + 1)
             return motion
         else:
             raise ValueError("No motion used with `enable_spacetime=False`!")
+        
+    def get_omega(self, delta_t):
+        if self.cfg.enable_spacetime:
+            omega_ = self._omega.reshape(-1, self.cfg.rank_omega, 4)
+            omega = torch.zeros(self._rotation.shape, dtype=self._rotation.dtype, device=self.device)
+            for i in range(self.cfg.rank_omega):
+                omega += omega_[:, i, :] * delta_t ** (i + 1)
+            return omega
+        else:
+            raise ValueError("No omega used with `enable_spacetime=False`!")
     
     @property
     def get_rotations(self):
@@ -253,9 +266,8 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             colors_precomp = self.get_features(tforpoly).reshape(n_points, 3)
             
             # polynomials
-            motion = self.get_motion(tforpoly)
-            rotations = rotations + tforpoly * self._omega
-            means3D = means3D + motion
+            rotations = rotations + self.get_omega(tforpoly)
+            means3D = means3D + self.get_motion(tforpoly)
         
         rotations = self.rotation_activation(rotations)
         
@@ -324,10 +336,16 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             
         
         if self.cfg.enable_spacetime:
-            omega = torch.zeros((fused_point_cloud.shape[0], 4), device="cuda")
+            omega = torch.zeros(
+                (fused_point_cloud.shape[0], 4 * self.cfg.rank_omega), 
+                device="cuda"
+            )
             self._omega = nn.Parameter(omega.requires_grad_(True))
             
-            motion = torch.zeros((fused_point_cloud.shape[0], 9), device="cuda")# x1, x2, x3,  y1,y2,y3, z1,z2,z3
+            motion = torch.zeros(
+                (fused_point_cloud.shape[0], 3 * self.cfg.rank_motion), 
+                device="cuda"
+            )# x1, x2, x3,  y1,y2,y3, z1,z2,z3
             self._motion = nn.Parameter(motion.requires_grad_(True))
             
             times = torch.zeros((fused_point_cloud.shape[0], 1), device="cuda")
@@ -834,7 +852,6 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         self.max_radii2D = torch.zeros((self._xyz.shape[0]), device="cuda")
         self.active_sh_degree = self.max_sh_degree
 
-        self.computedtrbfscale = torch.exp(self._trbf_scale) # precomputed
         self.computedopacity =self.opacity_activation(self._opacity)
         self.computedscales = torch.exp(self._scaling) # change not very large
 
@@ -842,12 +859,12 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             trbf_center = maybe_load_from_ply(ply_element, "trbf_center", np.zeros, (n_points, 1))
             trbf_scale = maybe_load_from_ply(ply_element, "trbf_scale", np.ones, (n_points, 1))
 
-            n_motion = 9
+            n_motion = 3 * self.cfg.rank_motion
             motion = np.zeros((n_points, n_motion))
             for i in range(n_motion):
                 motion[:, i] = maybe_load_from_ply(ply_element, "motion_"+str(i), np.zeros, (n_points,))
 
-            n_omega = 4
+            n_omega = 4 * self.cfg.rank_omega
             omegas = np.zeros((n_points, n_omega))
             for i in range(n_omega):
                 omegas[:, i] = maybe_load_from_ply(ply_element, "omega_"+str(i), np.zeros, (n_points,))
@@ -864,6 +881,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             self._omega = nn.Parameter(
                 torch.tensor(omegas, dtype=torch.float, device="cuda").requires_grad_(True)
             )
+            self.computedtrbfscale = torch.exp(self._trbf_scale) # precomputed
 
         if self.cfg.enable_deformation:
             self._deformation = self._deformation.to("cuda")
