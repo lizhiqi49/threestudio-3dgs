@@ -154,6 +154,10 @@ system:
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
+    lambda_opacity_binary: 0. # [ 0, 0.1, 0.1, 1500 ]
+    lambda_density_regulation: [ 0, 0.2, 0.2, 2500 ]
+    lambda_normal_regulation: [ 0, 0.2, 0.2, 2500 ]
+
 
   optimizer:
     name: Adam
@@ -164,6 +168,16 @@ system:
     params:
       background:
         lr: 0.001
+
+  sugar:
+    reset_neighbors_every: 100
+    start_regularization_from: 0 # consistent with lambda_density_regulation
+    n_samples_for_sdf_regularization: 50000
+    start_sdf_better_normal_from: 1500 # consistent with lambda_normal_regulation
+    use_sdf_better_normal_loss: true
+    prune_hard_opacity_threshold: 0.5
+    prune_low_opacity_gaussians_at: 1500 # consistent with lambda opacity binary end
+
 
 
 trainer:

@@ -231,6 +231,8 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         ## cross entropy loss for opacity to make it binary
         if self.C(self.cfg.loss.lambda_opacity_binary, "interval") > 0:
+            # only use in static stage
+            assert self.cfg.stage == 'static'
             visibility_filter = out["visibility_filter"]
             opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(visibility_filter), 1, 1)
             vis_opacities = opacity[torch.stack(visibility_filter)]
@@ -248,6 +250,7 @@ class Gaussian4DGen(BaseLift3DSystem):
                  "n_samples_for_sdf_regularization": self.cfg.sugar.n_samples_for_sdf_regularization,
                  "use_sdf_better_normal_loss": self.cfg.sugar.use_sdf_better_normal_loss,
                  "start_sdf_better_normal_from": self.cfg.sugar.start_sdf_better_normal_from,
+                 "timestamp": batch.get('timestamp')
                  })
             dloss = self.sugar.coarse_density_regulation(coarse_args)
             set_loss("density_regulation", dloss['density_regulation'])
@@ -327,7 +330,7 @@ class Gaussian4DGen(BaseLift3DSystem):
         """
 
         return {"loss": total_loss}
-    
+
     def on_validation_epoch_start(self) -> None:
         if self.geometry.cfg.use_spline:
             self.geometry.compute_control_knots()
@@ -447,7 +450,7 @@ class Gaussian4DGen(BaseLift3DSystem):
                 name="validation_epoch_end-ref",
                 step=self.true_global_step,
             )
-            
+
     def on_test_epoch_start(self) -> None:
         if self.geometry.cfg.use_spline:
             self.geometry.compute_control_knots()

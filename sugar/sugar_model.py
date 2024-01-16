@@ -3,6 +3,7 @@ import torch
 from pytorch3d.ops import knn_points, estimate_pointcloud_normals
 from pytorch3d.transforms import quaternion_apply, matrix_to_quaternion, quaternion_to_matrix
 from ..geometry.gaussian_base import GaussianBaseModel
+from ..geometry.spacetime_gaussian import SpacetimeGaussianModel
 
 scale_activation = torch.exp
 scale_inverse_activation = torch.log
@@ -125,14 +126,26 @@ class SuGaR():
                 log_beta.to(self.gaussians.device),
             ).to(self.gaussians.device)
 
+        # time dependent 3d gaussian attr
+        self.time_points = None
+        self.time_scaling = None
+        self.time_strengths = None
+        self.time_quaternions = None
+
+    def set_tdep_attr(self, time_points=None, time_scaling=None, time_strengths=None, time_quaternions=None):
+        self.time_points = time_points
+        self.time_scaling = time_scaling
+        self.time_strengths = time_strengths
+        self.time_quaternions = time_quaternions
+
     @property
     def points(self):
-        return self.gaussians.get_xyz
+        return self.gaussians.get_xyz if self.time_points is None else self.time_points
 
     @property
     def scaling(self):
         if not self.binded_to_surface_mesh:
-            scales = self.gaussians.get_scaling
+            scales = self.gaussians.get_scaling if self.time_scaling is None else self.time_scaling
         else:
             scales = None
             # scales = torch.cat([
@@ -143,7 +156,7 @@ class SuGaR():
 
     @property
     def strengths(self):
-        return self.gaussians.get_opacity
+        return self.gaussians.get_opacity if self.time_strengths is None else self.time_strengths
 
     @property
     def n_points(self):
@@ -159,7 +172,7 @@ class SuGaR():
     @property
     def quaternions(self):
         if not self.binded_to_surface_mesh:
-            quaternions = self.gaussians.get_rotation
+            quaternions = self.gaussians.get_rotation if self.time_quaternions is None else self.time_quaternions
         else:
             quaternions = None
         return quaternions
@@ -292,8 +305,6 @@ class SuGaR():
         # normalize density bigger or equal than 1
         density_mask = densities >= 1.
         densities[density_mask] = densities[density_mask] / (densities[density_mask].detach() + 1e-12)
-
-
 
         if return_closest_gaussian_opacities:
             fields['closest_gaussian_opacities'] = neighbor_opacities
@@ -660,6 +671,7 @@ class SuGaR():
         start_sdf_better_normal_from = args.start_sdf_better_normal_from
         use_sdf_better_normal_loss = args.use_sdf_better_normal_loss
         sdf_better_normal_gradient_through_normal_only = use_sdf_better_normal_loss
+        batch_timestamp = args.timestamp
         # ====================Parameters==================== #
 
         # ====================Regulation loss==================== #
@@ -667,6 +679,15 @@ class SuGaR():
         loss = {"density_regulation": 0, "normal_regulation": 0}
 
         for batch_idx in range(batch_size):
+            if batch_timestamp is not None:
+                assert isinstance(self.gaussians, SpacetimeGaussianModel)
+                timestamp = batch_timestamp[batch_idx]
+                time_points, time_scaling, time_quaternions, time_strengths, _ = self.gaussians.get_timed_all(timestamp)
+                self.set_tdep_attr(time_points=time_points, time_scaling=time_scaling,
+                                   time_strengths=time_strengths, time_quaternions=time_quaternions)
+            else:
+                self.set_tdep_attr()
+
             visibility_filter = batch_visibility_filter[batch_idx]
             sampling_mask = visibility_filter
             n_gaussians_in_sampling = sampling_mask.sum()
@@ -709,14 +730,16 @@ class SuGaR():
                 # Compute sdf better normal loss
                 if use_sdf_better_normal_loss and (current_step >= start_sdf_better_normal_from):
                     closest_gaussians_idx = self.knn_idx[sdf_gaussian_idx]
-                    closest_min_scaling = self.scaling.min(dim=-1)[0][closest_gaussians_idx].detach().view(len(sdf_samples), -1)
+                    closest_min_scaling = self.scaling.min(dim=-1)[0][closest_gaussians_idx].detach().view(
+                        len(sdf_samples), -1)
 
                     # Compute normals and flip their sign if needed
                     gaussians_normals = self.get_normals(estimate_from_points=False)
                     closest_gaussian_normals = gaussians_normals[closest_gaussians_idx]
                     samples_gaussian_normals = gaussians_normals[sdf_gaussian_idx]
                     closest_gaussian_normals = closest_gaussian_normals * torch.sign(
-                        (closest_gaussian_normals * samples_gaussian_normals[:, None]).sum(dim=-1, keepdim=True)).detach()
+                        (closest_gaussian_normals * samples_gaussian_normals[:, None]).sum(dim=-1,
+                                                                                           keepdim=True)).detach()
 
                     # Compute weights for normal regularization, based on the gradient of the sdf
                     closest_gaussian_opacities = fields['closest_gaussian_opacities'].detach()
@@ -741,5 +764,6 @@ class SuGaR():
 
         for k, v in loss.items():
             loss[k] = v / batch_size
+        self.set_tdep_attr()
         # ====================Regulation loss==================== #
         return loss
