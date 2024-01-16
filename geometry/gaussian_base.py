@@ -221,7 +221,7 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
         opacity_init: float = 0.1
 
         # sugar
-        sugar_prune_at: Any = 1000
+        sugar_prune_at: Any = None
         sugar_prune_threshold: float = 0.5
 
         shap_e_guidance_config: dict = field(default_factory=dict)

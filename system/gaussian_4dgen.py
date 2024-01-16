@@ -279,13 +279,14 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         if self.cfg.sugar.start_regularization_from is not None:
             if self.global_step == self.cfg.sugar.start_regularization_from:
-                self.sugar = SuGaR(self.geometry, keep_track_of_knn=True)
+                self.sugar = SuGaR(self.geometry, keep_track_of_knn=True, knn_to_track=self.cfg.sugar.knn_to_track)
+                self.sugar.reset_neighbors(timestamp=batch.get('timestamp'))
             elif self.global_step > self.cfg.sugar.start_regularization_from:
                 assert hasattr(self.geometry, "pruned_or_densified")
                 # reset neighbors after gaussians densified or settings
                 if self.geometry.pruned_or_densified or self.global_step % self.cfg.sugar.reset_neighbors_every == 0:
                     self.geometry.pruned_or_densified = False
-                    self.sugar.reset_neighbors()
+                    self.sugar.reset_neighbors(timestamp=batch.get('timestamp'))
 
         total_loss = 0.0
 

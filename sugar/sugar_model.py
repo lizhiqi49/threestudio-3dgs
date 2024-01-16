@@ -111,11 +111,13 @@ class SuGaR():
         #     gaussians.set_rotation(radiuses[0, ..., :4])
 
         self.keep_track_of_knn = keep_track_of_knn
-        if keep_track_of_knn:
-            self.knn_to_track = knn_to_track
-            knns = knn_points(gaussians.get_xyz[None], gaussians.get_xyz[None], K=knn_to_track)
-            self.knn_dists = knns.dists[0]
-            self.knn_idx = knns.idx[0]
+        self.knn_to_track = knn_to_track
+        # if keep_track_of_knn:
+        # self.knn_to_track = knn_to_track
+        # knns = knn_points(gaussians.get_xyz[None], gaussians.get_xyz[None], K=knn_to_track)
+        # self.knn_dists = knns.dists[0]
+        # self.knn_idx = knns.idx[0]
+        # self.reset_neighbors(knn_to_track)
 
         # Beta mode
         self.beta_mode = beta_mode
@@ -137,6 +139,14 @@ class SuGaR():
         self.time_scaling = time_scaling
         self.time_strengths = time_strengths
         self.time_quaternions = time_quaternions
+
+    def set_tdep_knn(self, timestamp):
+        assert isinstance(timestamp, torch.Tensor)
+        key = "{:.{}f}".format(timestamp, 1)
+        assert self.time_knn_dists.get(key) is not None
+        assert self.time_knn_idx.get(key) is not None
+        self.knn_idx = self.time_knn_idx[key]
+        self.knn_dists = self.time_knn_dists[key]
 
     @property
     def points(self):
@@ -226,7 +236,7 @@ class SuGaR():
 
         return random_points, random_indices
 
-    def reset_neighbors(self, knn_to_track: int = None):
+    def reset_neighbors(self, knn_to_track: int = None, timestamp=None):
         if self.binded_to_surface_mesh:
             print("WARNING! You should not reset the neighbors of a surface mesh.")
             print("Then, neighbors reset will be ignored.")
@@ -241,9 +251,27 @@ class SuGaR():
                     # Compute KNN
             with torch.no_grad():
                 self.knn_to_track = knn_to_track
-                knns = knn_points(self.points[None], self.points[None], K=knn_to_track)
-                self.knn_dists = knns.dists[0]
-                self.knn_idx = knns.idx[0]
+                if timestamp is None:
+                    knns = knn_points(self.points[None], self.points[None], K=knn_to_track)
+                    self.knn_dists = knns.dists[0]
+                    self.knn_idx = knns.idx[0]
+                    self.time_knn_dists = None
+                    self.time_knn_idx = None
+                else:
+                    self.knn_dists = None
+                    self.knn_idx = None
+                    self.time_knn_dists = {}
+                    self.time_knn_idx = {}
+                    assert isinstance(self.gaussians, SpacetimeGaussianModel)
+                    for idx in range(timestamp.shape[0]):
+                        t = timestamp[idx]
+                        key = "{:.{}f}".format(t, 1)
+                        if self.time_knn_dists.get(key) is not None:
+                            continue
+                        points = self.gaussians.get_timed_xyz(t)
+                        knns = knn_points(points[None], points[None], K=knn_to_track)
+                        self.time_knn_idx[key] = knns.idx[0]
+                        self.time_knn_dists[key] = knns.dists[0]
 
     def get_covariance(self, return_full_matrix=False, return_sqrt=False, inverse_scales=False):
         scaling = self.scaling
@@ -679,12 +707,14 @@ class SuGaR():
         loss = {"density_regulation": 0, "normal_regulation": 0}
 
         for batch_idx in range(batch_size):
+            # set time dependent params
             if batch_timestamp is not None:
                 assert isinstance(self.gaussians, SpacetimeGaussianModel)
                 timestamp = batch_timestamp[batch_idx]
                 time_points, time_scaling, time_quaternions, time_strengths, _ = self.gaussians.get_timed_all(timestamp)
                 self.set_tdep_attr(time_points=time_points, time_scaling=time_scaling,
                                    time_strengths=time_strengths, time_quaternions=time_quaternions)
+                self.set_tdep_knn(timestamp)
             else:
                 self.set_tdep_attr()
 
