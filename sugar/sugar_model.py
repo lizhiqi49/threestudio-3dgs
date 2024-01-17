@@ -142,7 +142,10 @@ class SuGaR():
 
     def set_tdep_knn(self, timestamp):
         assert isinstance(timestamp, torch.Tensor)
-        key = "{:.{}f}".format(timestamp, 1)
+        assert self.ref_timestamps is not None
+        ref_timestamp_idx = torch.argmin((timestamp - self.ref_timestamps).abs())
+        ref_timestamp = self.ref_timestamps[ref_timestamp_idx]
+        key = "{:.{}f}".format(ref_timestamp, 1)
         assert self.time_knn_dists.get(key) is not None
         assert self.time_knn_idx.get(key) is not None
         self.knn_idx = self.time_knn_idx[key]
@@ -257,11 +260,13 @@ class SuGaR():
                     self.knn_idx = knns.idx[0]
                     self.time_knn_dists = None
                     self.time_knn_idx = None
+                    self.ref_timestamps = None
                 else:
                     self.knn_dists = None
                     self.knn_idx = None
                     self.time_knn_dists = {}
                     self.time_knn_idx = {}
+                    self.ref_timestamps = timestamp
                     assert isinstance(self.gaussians, SpacetimeGaussianModel)
                     for idx in range(timestamp.shape[0]):
                         t = timestamp[idx]
@@ -694,7 +699,7 @@ class SuGaR():
 
         # new
         current_step = args.current_step
-        batch_visibility_filter = args.outputs['visibility_filter']
+        # batch_visibility_filter = args.outputs['visibility_filter']
         n_samples_for_sdf_regularization = args.n_samples_for_sdf_regularization
         start_sdf_better_normal_from = args.start_sdf_better_normal_from
         use_sdf_better_normal_loss = args.use_sdf_better_normal_loss
@@ -703,7 +708,8 @@ class SuGaR():
         # ====================Parameters==================== #
 
         # ====================Regulation loss==================== #
-        batch_size = len(batch_visibility_filter)
+        batch_size = len(batch_timestamp)
+        batch_visibility_filter = torch.ones(batch_size, self.gaussians._xyz.shape[0]).bool().cuda()
         loss = {"density_regulation": 0, "normal_regulation": 0}
 
         for batch_idx in range(batch_size):

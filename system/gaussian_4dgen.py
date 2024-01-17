@@ -20,9 +20,11 @@ from torch.cuda.amp import autocast
 from torchmetrics import PearsonCorrCoef
 
 from ..geometry.gaussian_base import BasicPointCloud, Camera
+from ..geometry.spacetime_gaussian import SpacetimeGaussianModel
 from ..sugar.sugar_model import SuGaR
 
 from mmcv.ops import knn
+from pytorch3d.ops import knn_points
 
 def prepare_nn_indices(xyz: Float[Tensor, "N_pts 3"], k=2) -> Int[Tensor, "N_pts k"]:
         """ Prepare the indices of k nearest neighbors for each point """
@@ -33,13 +35,20 @@ def prepare_nn_indices(xyz: Float[Tensor, "N_pts 3"], k=2) -> Int[Tensor, "N_pts
         return nn_indices
     
 def compute_nn_distances(
-    xyz: Float[Tensor, "B N_pts 3"], indices: Int[Tensor, "N_pts k"]
+    xyz: Float[Tensor, "B N_pts 3"], indices: Int[Tensor, "B N_pts k"]
 ) -> Float[Tensor, "B N_pts k"]:
-    N, k = indices.shape
-    bs = xyz.shape[0]
+    if indices.ndim == 2:
+        indices = indices.unsqueeze(0)
+    if indices.shape[0] == 1:
+        indices = indices.expand(xyz.shape[0], *indices.shape[1:])
+    bs, N, k = indices.shape
+    xyz_nn = torch.zeros(bs, N, k, 3).to(xyz)
+    for i in range(bs):
+        xyz_nn[i] = xyz[i, indices[i].flatten(), :].reshape(N, k, 3)
+
     dists = torch.norm(
-        xyz.repeat_interleave(k, dim=1) - xyz[:, indices.flatten(), :], dim=-1
-    ).reshape((bs, N, k))
+        xyz[:, :, None, :].repeat(1, 1, k, 1) - xyz_nn, dim=-1
+    )
     return dists
 
 
@@ -72,6 +81,12 @@ class Gaussian4DGen(BaseLift3DSystem):
         refinement: bool = False
         ambient_ratio_min: float = 0.5
         back_ground_color: Tuple[float, float, float] = (1, 1, 1)
+
+        # SuGaR
+        sugar: dict = field(default_factory=dict)
+
+        # KNN configs
+        knn_to_track: int = 10
 
     cfg: Config
 
@@ -147,12 +162,8 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         self.pearson = PearsonCorrCoef().to(self.device)
 
-        if C(self.cfg.loss.lambda_arap_reg, 0, 0) > 0:
-            static_xyz = self.geometry._xyz.data
-            self.gs_nn_indices = prepare_nn_indices(static_xyz, 10)
-            self.gs_nn_dists_static = compute_nn_distances(
-                static_xyz.unsqueeze(0), self.gs_nn_indices
-            )
+        # KNN attributes
+        self.knn_to_track = self.cfg.knn_to_track
 
     def training_substep(self, batch, batch_idx, guidance: str):
         """
@@ -194,10 +205,6 @@ class Gaussian4DGen(BaseLift3DSystem):
             # color loss
             gt_rgb = gt_rgb * gt_mask.float()
             set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"] * gt_mask.float()))
-            # if self.stage == "static":
-            #     set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"] * gt_mask.float()))
-            # else:
-            #     set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"]) / gt_rgb.shape[0])
             # mask loss
             set_loss("mask", F.mse_loss(gt_mask.float(), out["comp_mask"]))
 
@@ -256,10 +263,22 @@ class Gaussian4DGen(BaseLift3DSystem):
                 + (normal[:, :, 1:, :] - normal[:, :, :-1, :]).square().mean(),
             )
 
-        # ARAP regularization
-        if guidance == "ref" and self.C(self.cfg.loss.lambda_arap_reg) > 0 and self.global_step % self.cfg.freq.arap_reg == 0:
-            # xyz_timed = out["comp_xyz"]
+        ## cross entropy loss for opacity to make it binary
+        if self.stage == "static" and self.C(self.cfg.loss.lambda_opacity_binary) > 0:
+            # only use in static stage
+            assert self.cfg.stage == 'static'
+            visibility_filter = out["visibility_filter"]
+            opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(visibility_filter), 1, 1)
+            vis_opacities = opacity[torch.stack(visibility_filter)]
+            set_loss(
+                "opacity_binary",
+                -(vis_opacities * torch.log(vis_opacities + 1e-10)
+                + (1 - vis_opacities) * torch.log(1 - vis_opacities + 1e-10)).mean()
+            )
 
+        # Smooth regularization
+        if self.stage == "motion" and guidance == "ref" and self.global_step % self.cfg.freq.smooth_reg == 0:
+            # Densely sample frames in a smaller time range
             rand_range_start = np.random.rand() * 0.8   # (0.0 ~ 0.8)
             rand_timestamps = torch.as_tensor(
                 np.linspace(
@@ -271,47 +290,42 @@ class Gaussian4DGen(BaseLift3DSystem):
                 dtype=torch.float32, 
                 device=self.device
             )
-            xyz_timed = []
-            for t in rand_timestamps:
-                timed_outs = self.geometry.get_timed_all(t)
-                xyz_timed.append(timed_outs[0])
-            xyz_timed = torch.stack(xyz_timed, dim=0)
-            dists_timed = compute_nn_distances(xyz_timed, self.gs_nn_indices)
-            # loss_arap_reg = (
-            #     # F.mse_loss(dists_timed, self.gs_nn_dists_static.repeat(dists_timed.shape[0], 1, 1)) 
-            #     F.mse_loss(dists_timed[:-1], dists_timed[1:])
-            # )
-            # loss_arap_reg = F.mse_loss(dists_timed[:-1], dists_timed[1:])
-            loss_arap_reg = torch.abs(dists_timed[:-1] - dists_timed[1:]).mean()
-            set_loss("arap_reg", loss_arap_reg)
+            # ARAP regularization
+            if self.C(self.cfg.loss.lambda_arap_reg) > 0:
+                xyz_timed = []
+                for t in rand_timestamps:
+                    xyz_t = self.geometry.get_timed_xyz(t)
+                    xyz_timed.append(xyz_t)
+                xyz_timed = torch.stack(xyz_timed, dim=0)
 
+                # Get the indices of nearest reference timestamps
+                ref_timestamps = batch.get("timestamp")
+                ref_timestamp_idx = torch.argmin(
+                    (rand_timestamps[..., None] - ref_timestamps[None, ...]).abs(),
+                    dim=-1
+                )
+                nn_idx = self.knn_idx[ref_timestamp_idx]
+                nn_dists_timed = compute_nn_distances(xyz_timed, nn_idx)
+                nn_dists_ref = self.knn_dists[ref_timestamp_idx]
+                loss_arap_reg = (
+                    torch.abs(nn_dists_timed[:-1] - nn_dists_timed[1:]).mean()
+                    + torch.abs(nn_dists_timed - nn_dists_ref).mean()
+                )
+                set_loss("arap_reg", loss_arap_reg)
 
-        ## cross entropy loss for opacity to make it binary
-        if self.C(self.cfg.loss.lambda_opacity_binary, "interval") > 0:
-            # only use in static stage
-            assert self.cfg.stage == 'static'
-            visibility_filter = out["visibility_filter"]
-            opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(visibility_filter), 1, 1)
-            vis_opacities = opacity[torch.stack(visibility_filter)]
-            set_loss(
-                "opacity_binary",
-                -(vis_opacities * torch.log(vis_opacities + 1e-10)
-                  + (1 - vis_opacities) * torch.log(1 - vis_opacities + 1e-10)).mean()
-            )
-
-        ## density regulation loss
-        if self.C(self.cfg.loss.lambda_density_regulation, "interval") > 0:
-            coarse_args = EasyDict(
-                {"current_step": self.true_global_step,
-                 "outputs": out,
-                 "n_samples_for_sdf_regularization": self.cfg.sugar.n_samples_for_sdf_regularization,
-                 "use_sdf_better_normal_loss": self.cfg.sugar.use_sdf_better_normal_loss,
-                 "start_sdf_better_normal_from": self.cfg.sugar.start_sdf_better_normal_from,
-                 "timestamp": batch.get('timestamp')
-                 })
-            dloss = self.sugar.coarse_density_regulation(coarse_args)
-            set_loss("density_regulation", dloss['density_regulation'])
-            set_loss("normal_regulation", dloss['normal_regulation'])
+            # SuGaR density regulation loss
+            if self.C(self.cfg.loss.lambda_density_regulation) > 0:
+                coarse_args = EasyDict(
+                    {"current_step": self.true_global_step,
+                    "outputs": out,
+                    "n_samples_for_sdf_regularization": self.cfg.sugar.n_samples_for_sdf_regularization,
+                    "use_sdf_better_normal_loss": self.cfg.sugar.use_sdf_better_normal_loss,
+                    "start_sdf_better_normal_from": self.cfg.sugar.start_sdf_better_normal_from,
+                    "timestamp": rand_timestamps
+                    })
+                dloss = self.sugar.coarse_density_regulation(coarse_args)
+                set_loss("density_regulation", dloss['density_regulation'])
+                set_loss("normal_regulation", dloss['normal_regulation'])
 
         loss = 0.0
         for name, value in loss_terms.items():
@@ -330,20 +344,55 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         out.update({"loss": loss})
         return out
+    
+    @torch.no_grad()
+    def reset_neighbors(self, timestamps=None):
+        if timestamps is not None:
+            assert isinstance(self.geometry, SpacetimeGaussianModel)
+            points = []
+            for t in timestamps:
+                p = self.geometry.get_timed_xyz(t)
+                points.append(p)
+            points = torch.stack(points, dim=0)
+        else:
+            points = self.geometry._xyz.unsqueeze(0)
+        
+        knns = knn_points(points, points, K=self.knn_to_track)
+        self.knn_idx = knns.idx
+        self.knn_dists = knns.dists
+
+        if self.sugar is not None:
+            if timestamps is not None:
+                time_knn_idx = {
+                    "{:.{}f}".format(t, 1): self.knn_idx[i] for i, t in enumerate(timestamps)
+                }
+                time_knn_dists = {
+                    "{:.{}f}".format(t, 1): self.knn_dists[i] for i, t in enumerate(timestamps)
+                }
+                self.sugar.ref_timestamps = timestamps
+            else:
+                time_knn_idx = None
+                time_knn_dists = None
+            self.sugar.knn_idx = self.knn_idx[0]
+            self.sugar.knn_dists = self.knn_dists[0]
+            self.sugar.time_knn_idx = time_knn_idx
+            self.sugar.time_knn_dists = time_knn_dists
 
     def training_step(self, batch, batch_idx):
         opt = self.optimizers()
 
         if self.cfg.sugar.start_regularization_from is not None:
             if self.global_step == self.cfg.sugar.start_regularization_from:
-                self.sugar = SuGaR(self.geometry, keep_track_of_knn=True, knn_to_track=self.cfg.sugar.knn_to_track)
-                self.sugar.reset_neighbors(timestamp=batch.get('timestamp'))
+                self.sugar = SuGaR(self.geometry, keep_track_of_knn=True, knn_to_track=self.cfg.knn_to_track)
+                # self.sugar.reset_neighbors(timestamp=batch.get('timestamp'))
+                self.reset_neighbors(timestamps=batch.get('timestamp'))
             elif self.global_step > self.cfg.sugar.start_regularization_from:
                 assert hasattr(self.geometry, "pruned_or_densified")
                 # reset neighbors after gaussians densified or settings
-                if self.geometry.pruned_or_densified or self.global_step % self.cfg.sugar.reset_neighbors_every == 0:
+                if self.geometry.pruned_or_densified or self.global_step % self.cfg.freq.reset_neighbors == 0:
                     self.geometry.pruned_or_densified = False
-                    self.sugar.reset_neighbors(timestamp=batch.get('timestamp'))
+                    # self.sugar.reset_neighbors(timestamp=batch.get('timestamp'))
+                    self.reset_neighbors(timestamps=batch.get('timestamp'))
 
         total_loss = 0.0
 
