@@ -5,7 +5,7 @@ seed: 0
 
 data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
-  video_frames_dir: ./load/videos/anya2
+  video_frames_dir: ./load/videos/anya
   norm_timestamp: true
   num_frames: 10
   height: [256, 512]
@@ -156,6 +156,10 @@ system:
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
     lambda_arap_reg: 10000.
+    lambda_opacity_binary: 0. # [ 0, 0.1, 0.1, 1500 ]
+    lambda_density_regulation: [ 0, 1000, 1000, 2500 ]
+    lambda_normal_regulation: [ 0, 1000, 1000, 2500 ]
+
 
   optimizer:
     name: Adam
@@ -167,6 +171,15 @@ system:
       background:
         lr: 0.001
 
+  sugar:
+    reset_neighbors_every: 10
+    start_regularization_from: 0 # consistent with lambda_density_regulation
+    n_samples_for_sdf_regularization: 50000
+    start_sdf_better_normal_from: 0 # consistent with lambda_normal_regulation
+    use_sdf_better_normal_loss: true
+    prune_hard_opacity_threshold: 0.5
+    prune_low_opacity_gaussians_at: null # consistent with lambda opacity binary end
+    knn_to_track: 8
 
 trainer:
   max_steps: 5000

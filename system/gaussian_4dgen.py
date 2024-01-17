@@ -4,9 +4,12 @@ from dataclasses import dataclass, field
 from typing import Any, Dict
 
 import numpy as np
+from easydict import EasyDict
+
 import threestudio
 import torch
 import torch.nn.functional as F
+
 from threestudio.systems.base import BaseLift3DSystem
 from threestudio.systems.utils import parse_optimizer, parse_scheduler
 from threestudio.utils.loss import tv_loss
@@ -17,6 +20,7 @@ from torch.cuda.amp import autocast
 from torchmetrics import PearsonCorrCoef
 
 from ..geometry.gaussian_base import BasicPointCloud, Camera
+from ..sugar.sugar_model import SuGaR
 
 from mmcv.ops import knn
 
@@ -43,7 +47,7 @@ def compute_nn_distances(
 class Gaussian4DGen(BaseLift3DSystem):
     @dataclass
     class Config(BaseLift3DSystem.Config):
-        stage: str = "static"   # ["static", "motion", "refine"]
+        stage: str = "static"  # ["static", "motion", "refine"]
 
         # guidances
         prompt_processor_2d_type: Optional[str] = ""
@@ -53,7 +57,7 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         guidance_zero123_type: str = "stale-zero123-guidance"
         guidance_zero123: dict = field(default_factory=dict)
-        
+
         prompt_processor_3d_type: Optional[str] = ""
         prompt_processor_3d: dict = field(default_factory=dict)
         guidance_3d_type: Optional[str] = "image-dream-guidance"
@@ -75,7 +79,6 @@ class Gaussian4DGen(BaseLift3DSystem):
         # create geometry, material, background, renderer
         super().configure()
         self.automatic_optimization = False
-
         self.stage = self.cfg.stage
 
     def configure_optimizers(self):
@@ -118,11 +121,11 @@ class Gaussian4DGen(BaseLift3DSystem):
             self.guidance_3d = threestudio.find(self.cfg.guidance_3d_type)(self.cfg.guidance_3d)
         else:
             self.guidance_3d = None
-        
+
         # Maybe use video diffusion models
         self.enable_vid = (
-            self.stage == "motion" 
-            and self.cfg.guidance_vid_type is not None 
+            self.stage == "motion"
+            and self.cfg.guidance_vid_type is not None
             and C(self.cfg.loss.lambda_sds_vid, 0, 0) > 0
         )
         if self.enable_vid:
@@ -161,6 +164,7 @@ class Gaussian4DGen(BaseLift3DSystem):
             shading = "diffuse"
             batch["shading"] = shading
         elif guidance == "zero123":
+            # default store the reference view camera config, switch to random camera for zero123 guidance
             batch = batch["random_camera"]
             ambient_ratio = (
                 self.cfg.ambient_ratio_min
@@ -282,6 +286,33 @@ class Gaussian4DGen(BaseLift3DSystem):
             set_loss("arap_reg", loss_arap_reg)
 
 
+        ## cross entropy loss for opacity to make it binary
+        if self.C(self.cfg.loss.lambda_opacity_binary, "interval") > 0:
+            # only use in static stage
+            assert self.cfg.stage == 'static'
+            visibility_filter = out["visibility_filter"]
+            opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(visibility_filter), 1, 1)
+            vis_opacities = opacity[torch.stack(visibility_filter)]
+            set_loss(
+                "opacity_binary",
+                -(vis_opacities * torch.log(vis_opacities + 1e-10)
+                  + (1 - vis_opacities) * torch.log(1 - vis_opacities + 1e-10)).mean()
+            )
+
+        ## density regulation loss
+        if self.C(self.cfg.loss.lambda_density_regulation, "interval") > 0:
+            coarse_args = EasyDict(
+                {"current_step": self.true_global_step,
+                 "outputs": out,
+                 "n_samples_for_sdf_regularization": self.cfg.sugar.n_samples_for_sdf_regularization,
+                 "use_sdf_better_normal_loss": self.cfg.sugar.use_sdf_better_normal_loss,
+                 "start_sdf_better_normal_from": self.cfg.sugar.start_sdf_better_normal_from,
+                 "timestamp": batch.get('timestamp')
+                 })
+            dloss = self.sugar.coarse_density_regulation(coarse_args)
+            set_loss("density_regulation", dloss['density_regulation'])
+            set_loss("normal_regulation", dloss['normal_regulation'])
+
         loss = 0.0
         for name, value in loss_terms.items():
             self.log(f"train/{name}", value)
@@ -303,8 +334,19 @@ class Gaussian4DGen(BaseLift3DSystem):
     def training_step(self, batch, batch_idx):
         opt = self.optimizers()
 
+        if self.cfg.sugar.start_regularization_from is not None:
+            if self.global_step == self.cfg.sugar.start_regularization_from:
+                self.sugar = SuGaR(self.geometry, keep_track_of_knn=True, knn_to_track=self.cfg.sugar.knn_to_track)
+                self.sugar.reset_neighbors(timestamp=batch.get('timestamp'))
+            elif self.global_step > self.cfg.sugar.start_regularization_from:
+                assert hasattr(self.geometry, "pruned_or_densified")
+                # reset neighbors after gaussians densified or settings
+                if self.geometry.pruned_or_densified or self.global_step % self.cfg.sugar.reset_neighbors_every == 0:
+                    self.geometry.pruned_or_densified = False
+                    self.sugar.reset_neighbors(timestamp=batch.get('timestamp'))
+
         total_loss = 0.0
-        
+
         self.log(
             "gauss_num",
             int(self.geometry.get_xyz.shape[0]),
@@ -339,8 +381,14 @@ class Gaussian4DGen(BaseLift3DSystem):
         opt.step()
         opt.zero_grad(set_to_none=True)
 
+        ## TODO : add sugar regulation loss
+        """
+            1. add opacity cross entropy loss between [start step, end step]
+            2. add density regulation loss
+        """
+
         return {"loss": total_loss}
-    
+
     def on_validation_epoch_start(self) -> None:
         if self.geometry.cfg.use_spline:
             self.geometry.compute_control_knots()
@@ -397,7 +445,7 @@ class Gaussian4DGen(BaseLift3DSystem):
         if self.stage != "static":
             if batch["index"] == 0:
                 self.batch_ref_eval = batch
-            
+
             self.batch_ref_eval["timestamp"] = batch["timestamp"]
             out_ref = self(self.batch_ref_eval)
             self.save_image_grid(
@@ -438,7 +486,6 @@ class Gaussian4DGen(BaseLift3DSystem):
                 step=self.true_global_step,
             )
 
-
     def on_validation_epoch_end(self):
         filestem = f"it{self.true_global_step}-val"
         self.save_img_sequence(
@@ -461,7 +508,7 @@ class Gaussian4DGen(BaseLift3DSystem):
                 name="validation_epoch_end-ref",
                 step=self.true_global_step,
             )
-            
+
     def on_test_epoch_start(self) -> None:
         if self.geometry.cfg.use_spline:
             self.geometry.compute_control_knots()
@@ -514,7 +561,7 @@ class Gaussian4DGen(BaseLift3DSystem):
         if self.stage != "static":
             if batch["index"] == 0:
                 self.batch_ref_eval = batch
-            
+
             self.batch_ref_eval["timestamp"] = batch["timestamp"]
             out_ref = self(self.batch_ref_eval)
             self.save_image_grid(
@@ -572,6 +619,5 @@ class Gaussian4DGen(BaseLift3DSystem):
                 name="test-ref",
                 step=self.true_global_step,
             )
-            
         plysavepath = os.path.join(self.get_save_dir(), f"point_cloud_it{self.true_global_step}.ply")
         self.geometry.save_ply(plysavepath)

@@ -75,17 +75,17 @@ def gaussian_3d_coeff(xyzs, covs):
 
     # eps must be small enough !!!
     inv_det = 1 / (
-        a * d * f + 2 * e * c * b - e**2 * a - c**2 * d - b**2 * f + 1e-24
+        a * d * f + 2 * e * c * b - e ** 2 * a - c ** 2 * d - b ** 2 * f + 1e-24
     )
-    inv_a = (d * f - e**2) * inv_det
+    inv_a = (d * f - e ** 2) * inv_det
     inv_b = (e * c - b * f) * inv_det
     inv_c = (e * b - c * d) * inv_det
-    inv_d = (a * f - c**2) * inv_det
+    inv_d = (a * f - c ** 2) * inv_det
     inv_e = (b * c - e * a) * inv_det
-    inv_f = (a * d - b**2) * inv_det
+    inv_f = (a * d - b ** 2) * inv_det
 
     power = (
-        -0.5 * (x**2 * inv_a + y**2 * inv_d + z**2 * inv_f)
+        -0.5 * (x ** 2 * inv_a + y ** 2 * inv_d + z ** 2 * inv_f)
         - x * y * inv_b
         - x * z * inv_c
         - y * z * inv_e
@@ -220,6 +220,10 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
         pc_init_radius: float = 0.8
         opacity_init: float = 0.1
 
+        # sugar
+        sugar_prune_at: Any = None
+        sugar_prune_threshold: float = 0.5
+
         shap_e_guidance_config: dict = field(default_factory=dict)
 
     cfg: Config
@@ -243,6 +247,8 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
 
     def configure(self) -> None:
         super().configure()
+        self.pruned_or_densified = False
+
         self.active_sh_degree = 0
         self.max_sh_degree = self.cfg.sh_degree
         self._xyz = torch.empty(0)
@@ -263,7 +269,7 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             shap_e_guidance = threestudio.find("shap-e-guidance")(
                 self.cfg.shap_e_guidance_config
             )
-            prompt = self.cfg.geometry_convert_from[len("shap-e:") :]
+            prompt = self.cfg.geometry_convert_from[len("shap-e:"):]
             xyz, color = shap_e_guidance(prompt)
 
             pcd = BasicPointCloud(
@@ -277,7 +283,7 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             lrm_guidance = threestudio.find("lrm-guidance")(
                 self.cfg.shap_e_guidance_config
             )
-            prompt = self.cfg.geometry_convert_from[len("lrm:") :]
+            prompt = self.cfg.geometry_convert_from[len("lrm:"):]
             xyz, color = lrm_guidance(prompt)
 
             pcd = BasicPointCloud(
@@ -364,9 +370,17 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             )
         return self.scaling_activation(self._scaling)
 
+    def set_scaling(self, scaling):
+        assert self._scaling.shape == scaling.shape
+        self._scaling.data.copy_(scaling)
+
     @property
     def get_rotation(self):
         return self.rotation_activation(self._rotation)
+
+    def set_rotation(self, rotation):
+        assert self._rotation.shape == rotation.shape
+        self._rotation.data.copy_(rotation)
 
     @property
     def get_xyz(self):
@@ -806,11 +820,19 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
         radii,
         viewspace_point_tensor,
     ):
+        if self.cfg.sugar_prune_at is not None and iteration == self.cfg.sugar_prune_at:
+            self.pruned_or_densified = True
+            prune_mask = (self.get_opacity < self.cfg.sugar_prune_threshold).squeeze()
+            self.prune_points(prune_mask)
+            return
+
         if self._xyz.shape[0] >= self.cfg.max_num + 100:
+            self.pruned_or_densified = True
             prune_mask = torch.randperm(self._xyz.shape[0]).to(self._xyz.device)
             prune_mask = prune_mask > self.cfg.max_num
             self.prune_points(prune_mask)
             return
+
         # Keep track of max radii in image-space for pruning
         # loop over batch
         bs = len(viewspace_point_tensor)
@@ -819,7 +841,6 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             visibility_filter_i = visibility_filter[i]
             viewspace_point_tensor_i = viewspace_point_tensor[i]
             self.max_radii2D = torch.max(self.max_radii2D, radii_i.float())
-
             self.add_densification_stats(viewspace_point_tensor_i, visibility_filter_i)
 
         if (
@@ -827,6 +848,7 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             and iteration < self.cfg.prune_until_iter
             and iteration % self.cfg.prune_interval == 0
         ):
+            self.pruned_or_densified = True
             self.prune(self.cfg.min_opac_prune, self.cfg.radii2d_thresh)
             if iteration % self.cfg.opacity_reset_interval == 0:
                 self.reset_opacity()
@@ -836,4 +858,7 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             and iteration < self.cfg.densify_until_iter
             and iteration % self.cfg.densification_interval == 0
         ):
+            self.pruned_or_densified = True
             self.densify(self.cfg.densify_grad_threshold)
+
+

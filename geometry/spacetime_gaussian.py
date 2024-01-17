@@ -20,8 +20,8 @@ from threestudio.utils.typing import *
 import pypose as pp
 
 from .gaussian_base import (
-    GaussianBaseModel, 
-    BasicPointCloud, 
+    GaussianBaseModel,
+    BasicPointCloud,
 )
 from .gaussian_base import RGB2SH, inverse_sigmoid, build_rotation, SH2RGB
 from .deformation import DeformationNetwork, ModelHiddenParams
@@ -37,10 +37,10 @@ class SpacetimeGaussianModel(GaussianBaseModel):
 
         enable_static: bool = False
 
-        enable_dynamic: bool = False    # delta_xyz, delta_rot
+        enable_dynamic: bool = False  # delta_xyz, delta_rot
         delta_xyz_lr: float = 0.001
         delta_rot_lr: float = 0.0001
-        
+
         enable_spacetime: bool = True
         omega_lr: float = 0.01
         trbfc_lr: float = 0.01
@@ -49,24 +49,26 @@ class SpacetimeGaussianModel(GaussianBaseModel):
 
         rank_motion: int = 3
         rank_omega: int = 1
-        
+
         addsphpointsscale: float = 0.8
         trbfslinit: float = 0.1
         raystart: float = 0.7
         spatial_lr_scale: float = 10.0
-        
+
         enable_deformation: bool = False
         # deformation_args: dict = field(default_factory=dict)
         deformation_lr: Optional[Any] = 0
         grid_lr: Optional[Any] = 0
-        
+
     cfg: Config
-    
+
     def configure(self) -> None:
+        self.pruned_or_densified = False
+
         self.active_sh_degree = 0
         self.max_sh_degree = self.cfg.sh_degree
         self._xyz = torch.empty(0)
-        
+
         self._features_dc = torch.empty(0)
         self._features_rest = torch.empty(0)
         self._scaling = torch.empty(0)
@@ -80,7 +82,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         self.optimizer = None
         self.spatial_lr_scale = self.cfg.spatial_lr_scale
         self.setup_functions()
-        
+
         # Add temporal parameters
         self.num_frames = self.cfg.num_frames
 
@@ -94,20 +96,20 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         if self.cfg.enable_spacetime:
             self._motion = torch.empty(0)
             self._omega = torch.empty(0)
-            
+
             self.delta_t = None
-            self.omegamask = None 
-            self.maskforems = None 
+            self.omegamask = None
+            self.maskforems = None
             self.distancetocamera = None
             self.trbfslinit = self.cfg.trbfslinit
-            self.ts = None 
-            self.trbfoutput = None 
-            self.preprocesspoints = False 
+            self.ts = None
+            self.trbfoutput = None
+            self.preprocesspoints = False
             self.addsphpointsscale = self.cfg.addsphpointsscale
 
-            self.maxz, self.minz =  0.0 , 0.0 
-            self.maxy, self.miny =  0.0 , 0.0 
-            self.maxx, self.minx =  0.0 , 0.0  
+            self.maxz, self.minz = 0.0, 0.0
+            self.maxy, self.miny = 0.0, 0.0
+            self.maxx, self.minx = 0.0, 0.0
             self.computedtrbfscale = None
             self.computedopacity = None
             self.raystart = self.cfg.raystart
@@ -125,7 +127,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             shap_e_guidance = threestudio.find("shap-e-guidance")(
                 self.cfg.shap_e_guidance_config
             )
-            prompt = self.cfg.geometry_convert_from[len("shap-e:") :]
+            prompt = self.cfg.geometry_convert_from[len("shap-e:"):]
             xyz, color = shap_e_guidance(prompt)
 
             pcd = BasicPointCloud(
@@ -139,7 +141,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             lrm_guidance = threestudio.find("lrm-guidance")(
                 self.cfg.shap_e_guidance_config
             )
-            prompt = self.cfg.geometry_convert_from[len("lrm:") :]
+            prompt = self.cfg.geometry_convert_from[len("lrm:"):]
             xyz, color = lrm_guidance(prompt)
 
             pcd = BasicPointCloud(
@@ -217,8 +219,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
 
             self.create_from_pcd(pcd, 10)
             self.training_setup()
-    
-    
+
     def get_motion(self, delta_t, frame_idx):
         motion = torch.zeros(self._xyz.shape, dtype=self._xyz.dtype, device=self.device)
         if self.cfg.enable_spacetime:
@@ -229,7 +230,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             motion_dynamic = self._delta_xyz[frame_idx]
             motion += motion_dynamic
         return motion
-        
+
     def get_omega(self, delta_t, frame_idx):
         omega = torch.zeros(self._rotation.shape, dtype=self._xyz.dtype, device=self.device)
         if self.cfg.enable_spacetime:
@@ -240,23 +241,23 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             omega_dynamic = self._delta_rot[frame_idx]
             omega += omega_dynamic
         return omega
-    
+
     @property
     def get_rotations(self):
         return self._rotation
-    
+
     @property
     def get_trbfcenter(self):
         return self._trbf_center
-    
+
     @property
     def get_trbfscale(self):
         return self._trbf_scale
-    
+
     @property
     def get_features(self):
         return SH2RGB(self._features_dc)
-    
+
     def _get_timed_xyz_and_rot(self, timestamp, frame_idx):
         means3D = self.get_xyz
         rotations = self._rotation
@@ -267,32 +268,32 @@ class SpacetimeGaussianModel(GaussianBaseModel):
 
         if self.cfg.enable_deformation:
             means3D, scales, rotations, opacity = self._deformation(
-                means3D, scales, rotations, opacity, timestamp*2-1
+                means3D, scales, rotations, opacity, timestamp * 2 - 1
             )
-        
+
         if self.cfg.enable_spacetime:
             trbfcenter = self.get_trbfcenter
             trbfdistanceoffset = timestamp - trbfcenter
             tforpoly = trbfdistanceoffset.detach()
             delta_t = tforpoly
-            # trbfdistance =  trbfdistanceoffset / torch.exp(trbfscale) 
+            # trbfdistance =  trbfdistanceoffset / torch.exp(trbfscale)
             # trbfoutput = torch.exp(-1 * trbfdistance.pow(2))
             # # self.trbfoutput = trbfoutput
-            
+
             # opacity = opacity * trbfoutput
         else:
             delta_t = None
-            
+
         rotations = rotations + self.get_omega(delta_t, frame_idx)
         means3D = means3D + self.get_motion(delta_t, frame_idx)
         return means3D, rotations
-    
+
     def get_timed_all(self, timestamp, frame_idx=None):
         means3D = self.get_xyz
         opacity = self._opacity
         scales = self._scaling
         rotations = self._rotation
-        
+
         n_points = means3D.shape[0]
         timestamp = timestamp.expand(n_points, 1)
 
@@ -301,33 +302,60 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         else:
             if self.cfg.enable_deformation:
                 means3D, scales, rotations, opacity = self._deformation(
-                    means3D, scales, rotations, opacity, timestamp*2-1
+                    means3D, scales, rotations, opacity, timestamp * 2 - 1
                 )
-            
+
             if self.cfg.enable_spacetime:
                 trbfcenter = self.get_trbfcenter
                 trbfscale = self.get_trbfscale
                 trbfdistanceoffset = timestamp - trbfcenter
                 tforpoly = trbfdistanceoffset.detach()
                 delta_t = tforpoly
-                # trbfdistance =  trbfdistanceoffset / torch.exp(trbfscale) 
+                # trbfdistance =  trbfdistanceoffset / torch.exp(trbfscale)
                 # trbfoutput = torch.exp(-1 * trbfdistance.pow(2))
                 # # self.trbfoutput = trbfoutput
-                
+
                 # opacity = opacity * trbfoutput
             else:
                 delta_t = None
-                
+
             rotations = rotations + self.get_omega(delta_t, frame_idx)
             means3D = means3D + self.get_motion(delta_t, frame_idx)
-        
+
         colors_precomp = self.get_features.reshape(n_points, 3)
         opacity = self.opacity_activation(opacity)
         scales = self.scaling_activation(scales)
         rotations = self.rotation_activation(rotations)
-        
+
         return means3D, scales, rotations, opacity, colors_precomp
-    
+
+    def get_timed_xyz(self, timestamp, frame_idx=None):
+        means3D = self.get_xyz
+        opacity = self._opacity
+        scales = self._scaling
+        rotations = self._rotation
+
+        n_points = means3D.shape[0]
+        timestamp = timestamp.expand(n_points, 1)
+        if self.cfg.use_spline:
+            means3D, _ = self._spline_interp(timestamp[:, 0])
+        else:
+            if self.cfg.enable_deformation:
+                means3D, _, _, _ = self._deformation(
+                    means3D, scales, rotations, opacity, timestamp * 2 - 1
+                )
+            if self.cfg.enable_spacetime:
+                trbfcenter = self.get_trbfcenter
+                trbfscale = self.get_trbfscale
+                trbfdistanceoffset = timestamp - trbfcenter
+                tforpoly = trbfdistanceoffset.detach()
+                delta_t = tforpoly
+            else:
+                delta_t = None
+            means3D = means3D + self.get_motion(delta_t, frame_idx)
+
+        return means3D
+
     def init_cubic_spliner(self):
         n_ctrl_knots = self.num_frames
         t_interv = torch.as_tensor(1 / (n_ctrl_knots - 3)).cuda()   # exclude start and end point
@@ -336,7 +364,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         self.spliner.data = pp.identity_SE3(1, self.num_frames)
         self.spliner.set_start_time(-t_interv)
         self.spliner.update_end_time()
-           
+
     def compute_control_knots(self):
         ctrl_knots_xyz = []
         ctrl_knots_rot = []
@@ -347,7 +375,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
                 self.num_frames, 
                 endpoint=True
             ),
-            dtype=torch.float32, 
+            dtype=torch.float32,
             device="cuda"
         )
         for i, t in enumerate(ts):
@@ -356,7 +384,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             ctrl_knots_rot.append(rot)
         ctrl_knots_xyz = torch.stack(ctrl_knots_xyz, dim=0)
         ctrl_knots_rot = torch.stack(ctrl_knots_rot, dim=0)
-        
+
         self.spliner.data: Float[pp.LieTensor, "N_pts, N_ctrlknots, 7"]
         self.spliner.data = pp.SE3(
             torch.cat([ctrl_knots_xyz, ctrl_knots_rot], dim=-1).permute(1, 0, 2)
@@ -371,7 +399,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
     def oneupSHdegree(self):
         if self.active_sh_degree < self.max_sh_degree:
             self.active_sh_degree += 1
-            
+
     def create_from_pcd(self, pcd: BasicPointCloud, spatial_lr_scale: float):
         self.spatial_lr_scale = spatial_lr_scale
         fused_point_cloud = torch.tensor(np.asarray(pcd.points)).float().cuda()
@@ -423,58 +451,58 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         if self.cfg.pred_normal:
             normals = torch.zeros((fused_point_cloud.shape[0], 3), device="cuda")
             self._normal = nn.Parameter(normals.requires_grad_(True))
-            
+
         if self.cfg.enable_deformation:
             self._deformation = self._deformation.to("cuda")
-            self._deformation_table = torch.gt(torch.ones((self.get_xyz.shape[0]),device="cuda"),0)
-        
+            self._deformation_table = torch.gt(torch.ones((self.get_xyz.shape[0]), device="cuda"), 0)
+
         if self.cfg.enable_dynamic:
             delta_xyz = torch.zeros((self.num_frames, *self._xyz.shape), device="cuda")
             self._delta_xyz = nn.Parameter(delta_xyz.requires_grad_(True))
             delta_rot = torch.zeros((self.num_frames, *self._rotation.shape), device="cuda")
             self._delta_rot = nn.Parameter(delta_rot.requires_grad_(True))
-        
+
         if self.cfg.enable_spacetime:
             omega = torch.zeros(
-                (fused_point_cloud.shape[0], 4 * self.cfg.rank_omega), 
+                (fused_point_cloud.shape[0], 4 * self.cfg.rank_omega),
                 device="cuda"
             )
             self._omega = nn.Parameter(omega.requires_grad_(True))
-            
+
             motion = torch.zeros(
-                (fused_point_cloud.shape[0], 3 * self.cfg.rank_motion), 
+                (fused_point_cloud.shape[0], 3 * self.cfg.rank_motion),
                 device="cuda"
-            )# x1, x2, x3,  y1,y2,y3, z1,z2,z3
+            )  # x1, x2, x3,  y1,y2,y3, z1,z2,z3
             self._motion = nn.Parameter(motion.requires_grad_(True))
-            
+
             times = torch.zeros((fused_point_cloud.shape[0], 1), device="cuda")
             self._trbf_center = nn.Parameter(times.contiguous().requires_grad_(True))
-            self._trbf_scale = nn.Parameter(torch.ones((self.get_xyz.shape[0], 1), device="cuda").requires_grad_(True)) 
-            
+            self._trbf_scale = nn.Parameter(torch.ones((self.get_xyz.shape[0], 1), device="cuda").requires_grad_(True))
+
             if self.trbfslinit is not None:
-                nn.init.constant_(self._trbf_scale, self.trbfslinit) # too large ?
+                nn.init.constant_(self._trbf_scale, self.trbfslinit)  # too large ?
             else:
-                nn.init.constant_(self._trbf_scale, 0) # too large ?
+                nn.init.constant_(self._trbf_scale, 0)  # too large ?
 
             nn.init.constant_(self._omega, 0)
             self.rgb_grd = {}
 
-            self.maxz, self.minz = torch.amax(self._xyz[:,2]), torch.amin(self._xyz[:,2]) 
-            self.maxy, self.miny = torch.amax(self._xyz[:,1]), torch.amin(self._xyz[:,1]) 
-            self.maxx, self.minx = torch.amax(self._xyz[:,0]), torch.amin(self._xyz[:,0]) 
-            self.maxz = min((self.maxz, 200.0)) # some outliers in the n4d datasets.. 
-            
+            self.maxz, self.minz = torch.amax(self._xyz[:, 2]), torch.amin(self._xyz[:, 2])
+            self.maxy, self.miny = torch.amax(self._xyz[:, 1]), torch.amin(self._xyz[:, 1])
+            self.maxx, self.minx = torch.amax(self._xyz[:, 0]), torch.amin(self._xyz[:, 0])
+            self.maxz = min((self.maxz, 200.0))  # some outliers in the n4d datasets..
+
         if self.cfg.use_spline:
             self.init_cubic_spliner()
-        
+
     def training_setup(self):
         training_args = self.cfg
         # self.percent_dense = training_args.percent_dense
         self.xyz_gradient_accum = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         if self.cfg.enable_deformation:
-            self._deformation_accum = torch.zeros((self.get_xyz.shape[0],3),device="cuda")
-        
+            self._deformation_accum = torch.zeros((self.get_xyz.shape[0], 3), device="cuda")
+
         position_lr_init = C(training_args.position_lr, 0, 0) * self.spatial_lr_scale
         l = []
         if self.cfg.enable_static:
@@ -519,7 +547,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
                     "name": "delta_rot",
                 }
             ]
-        
+
         if self.cfg.enable_spacetime:
             l += [
                 {
@@ -528,7 +556,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
                     "name": "omega",
                 },
                 {
-                    "params": [self._trbf_center], 
+                    "params": [self._trbf_center],
                     "lr": C(training_args.trbfc_lr, 0, 0),
                     "name": "trbf_center",
                 },
@@ -554,13 +582,13 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         if self.cfg.enable_deformation:
             l += [
                 {
-                    'params': list(self._deformation.get_mlp_parameters()), 
-                    'lr': C(training_args.deformation_lr, 0, 0) * self.spatial_lr_scale, 
+                    'params': list(self._deformation.get_mlp_parameters()),
+                    'lr': C(training_args.deformation_lr, 0, 0) * self.spatial_lr_scale,
                     "name": "deformation"
                 },
                 {
-                    'params': list(self._deformation.get_grid_parameters()), 
-                    'lr': C(training_args.grid_lr, 0, 0) * self.spatial_lr_scale, 
+                    'params': list(self._deformation.get_grid_parameters()),
+                    'lr': C(training_args.grid_lr, 0, 0) * self.spatial_lr_scale,
                     "name": "grid"
                 },
             ]
@@ -568,7 +596,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         self.optimize_list = l
         self.optimize_params = [d["name"] for d in l]
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
-        
+
     def update_learning_rate(self, iteration):
         """Learning rate scheduling per step"""
         for param_group in self.optimizer.param_groups:
@@ -600,7 +628,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
                     param_group["lr"] = C(
                         self.cfg.normal_lr, 0, iteration, interpolation="exp"
                     )
-            
+
             if self.cfg.enable_dynamic:
                 if param_group["name"] == "delta_xyz":
                     param_group["lr"] = C(
@@ -612,7 +640,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
                     )
 
             if self.cfg.enable_spacetime:
-                pass    # Following the original paper to use constant lr
+                pass  # Following the original paper to use constant lr
 
             if self.cfg.enable_deformation:
                 if "grid" in param_group["name"]:
@@ -623,22 +651,22 @@ class SpacetimeGaussianModel(GaussianBaseModel):
                     param_group["lr"] = C(
                         self.cfg.deformation_lr, 0, iteration, interpolation="exp"
                     ) * self.spatial_lr_scale
-                    
+
         self.color_clip = C(self.cfg.color_clip, 0, iteration)
-        
+
     def prune_points(self, mask):
         valid_points_mask = ~mask
         optimizable_tensors = self._prune_optimizer(valid_points_mask)
 
         self._xyz = optimizable_tensors["xyz"]
         self._features_dc = optimizable_tensors["f_dc"]
-        #self._features_rest = optimizable_tensors["f_rest"]
+        # self._features_rest = optimizable_tensors["f_rest"]
         self._opacity = optimizable_tensors["opacity"]
         self._scaling = optimizable_tensors["scaling"]
         self._rotation = optimizable_tensors["rotation"]
         if self.cfg.pred_normal:
             self._normal = optimizable_tensors["normal"]
-        
+
         self.xyz_gradient_accum = self.xyz_gradient_accum[valid_points_mask]
 
         self.denom = self.denom[valid_points_mask]
@@ -647,19 +675,19 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         if self.cfg.enable_dynamic:
             self._delta_xyz = optimizable_tensors["delta_xyz"]
             self._detla_rot = optimizable_tensors["delta_rot"]
-        
+
         if self.cfg.enable_spacetime:
             self._trbf_center = optimizable_tensors["trbf_center"]
             self._trbf_scale = optimizable_tensors["trbf_scale"]
             self._motion = optimizable_tensors["motion"]
             self._omega = optimizable_tensors["omega"]
-            if self.omegamask is not None :
+            if self.omegamask is not None:
                 self.omegamask = self.omegamask[valid_points_mask]
-            
+
         if self.cfg.enable_deformation:
             self._deformation_accum = self._deformation_accum[valid_points_mask]
             self._deformation_table = self._deformation_table[valid_points_mask]
-            
+
     def densification_postfix(
         self,
         new_xyz,
@@ -724,13 +752,13 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             self._normal = optimizable_tensors["normal"]
 
         if self.cfg.enable_deformation:
-            self._deformation_table = torch.cat([self._deformation_table,new_deformation_table],-1)
+            self._deformation_table = torch.cat([self._deformation_table, new_deformation_table], -1)
             self._deformation_accum = torch.zeros((self.get_xyz.shape[0], 3), device="cuda")
-        
+
         self.xyz_gradient_accum = torch.zeros((self._xyz.shape[0], 1), device="cuda")
         self.denom = torch.zeros((self._xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self._xyz.shape[0]), device="cuda")
-            
+
     def densify_and_split(self, grads, grad_threshold, N=2):
         n_init_points = self._xyz.shape[0]
         # Extract points that satisfy the gradient condition
@@ -757,7 +785,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         new_features_dc = self._features_dc[selected_pts_mask].repeat(N, 1, 1)
         # new_features_rest = self._features_rest[selected_pts_mask].repeat(N, 1, 1)
         new_opacity = self._opacity[selected_pts_mask].repeat(N, 1)
-        
+
         postfix_inputs = (
             new_xyz, new_features_dc, new_opacity, new_scaling, new_rotation,
         )
@@ -766,24 +794,24 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             new_delta_xyz = self._delta_xyz[selected_pts_mask].repeat(1, N, 1)
             new_delta_rot = self._delta_xyz[selected_pts_mask].repeat(1, N, 1)
             postfix_inputs += (new_delta_xyz, new_delta_rot,)
-        
+
         if self.cfg.enable_spacetime:
-            new_trbf_center = self._trbf_center[selected_pts_mask].repeat(N,1)
-            new_trbf_center = torch.rand_like(new_trbf_center) #* 0.5
-            new_trbf_scale = self._trbf_scale[selected_pts_mask].repeat(N,1)
-            new_motion = self._motion[selected_pts_mask].repeat(N,1)
-            new_omega = self._omega[selected_pts_mask].repeat(N,1)
+            new_trbf_center = self._trbf_center[selected_pts_mask].repeat(N, 1)
+            new_trbf_center = torch.rand_like(new_trbf_center)  # * 0.5
+            new_trbf_scale = self._trbf_scale[selected_pts_mask].repeat(N, 1)
+            new_motion = self._motion[selected_pts_mask].repeat(N, 1)
+            new_omega = self._omega[selected_pts_mask].repeat(N, 1)
             postfix_inputs += (
                 new_trbf_center, new_trbf_scale, new_motion, new_omega,
             )
-           
+
         if self.cfg.enable_deformation:
             new_deformation_table = self._deformation_table[selected_pts_mask].repeat(N)
             postfix_inputs += (new_deformation_table,)
 
         if self.cfg.pred_normal:
             new_normal = self._normal[selected_pts_mask].repeat(N, 1)
-            postfix_inputs += (new_normal, )
+            postfix_inputs += (new_normal,)
 
         self.densification_postfix(*postfix_inputs)
 
@@ -794,7 +822,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             )
         )
         self.prune_points(prune_filter)
-        
+
     def densify_and_clone(self, grads, grad_threshold):
         # Extract points that satisfy the gradient condition
         selected_pts_mask = torch.where(
@@ -815,29 +843,30 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         postfix_inputs = (
             new_xyz, new_features_dc, new_opacity, new_scaling, new_rotation,
         )
-        
+
         if self.cfg.enable_dynamic:
             new_delta_xyz = self._delta_xyz[selected_pts_mask]
             new_delta_rot = self._delta_xyz[selected_pts_mask]
             postfix_inputs += (new_delta_xyz, new_delta_rot,)
 
         if self.cfg.enable_spacetime:
-            new_trbf_center =  torch.rand((self._trbf_center[selected_pts_mask].shape[0], 1), device="cuda")  #self._trbf_center[selected_pts_mask]
+            new_trbf_center = torch.rand((self._trbf_center[selected_pts_mask].shape[0], 1),
+                                         device="cuda")  # self._trbf_center[selected_pts_mask]
             new_trbf_scale = self._trbf_scale[selected_pts_mask]
             new_motion = self._motion[selected_pts_mask]
             new_omega = self._omega[selected_pts_mask]
             postfix_inputs += (
                 new_trbf_center, new_trbf_scale, new_motion, new_omega,
             )
-          
+
         if self.cfg.enable_deformation:
             new_deformation_table = self._deformation_table[selected_pts_mask]
-            postfix_inputs += (new_deformation_table, )
+            postfix_inputs += (new_deformation_table,)
 
         if self.cfg.pred_normal:
             new_normal = self._normal[selected_pts_mask]
-            postfix_inputs += (new_normal, )
-            
+            postfix_inputs += (new_normal,)
+
         self.densification_postfix(*postfix_inputs)
 
     def construct_list_of_attributes(self):
@@ -873,7 +902,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
 
     def save_ply(self, path):
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        
+
         xyz = self._xyz.detach().cpu().numpy()
         normals = np.zeros_like(xyz)
         f_dc = self._features_dc.squeeze(1).detach().cpu().numpy()
@@ -899,7 +928,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
                 attributes += (delta_rot[i],)
 
         if self.cfg.enable_spacetime:
-            trbf_center= self._trbf_center.detach().cpu().numpy()
+            trbf_center = self._trbf_center.detach().cpu().numpy()
             trbf_scale = self._trbf_scale.detach().cpu().numpy()
             motion = self._motion.detach().cpu().numpy()
             omega = self._omega.detach().cpu().numpy()
@@ -964,7 +993,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         rots = np.zeros((xyz.shape[0], len(rot_names)))
         for idx, attr_name in enumerate(rot_names):
             rots[:, idx] = np.asarray(ply_element[attr_name])
-            
+
         if self.max_sh_degree > 0:
             extra_f_names = [
                 p.name
@@ -1019,8 +1048,8 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         self.max_radii2D = torch.zeros((self._xyz.shape[0]), device="cuda")
         self.active_sh_degree = self.max_sh_degree
 
-        self.computedopacity =self.opacity_activation(self._opacity)
-        self.computedscales = torch.exp(self._scaling) # change not very large
+        self.computedopacity = self.opacity_activation(self._opacity)
+        self.computedscales = torch.exp(self._scaling)  # change not very large
 
         if self.cfg.enable_dynamic:
             delta_xyz = np.zeros((self.num_frames, n_points, 3))
@@ -1050,13 +1079,13 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             n_motion = 3 * self.cfg.rank_motion
             motion = np.zeros((n_points, n_motion))
             for i in range(n_motion):
-                motion[:, i] = maybe_load_from_ply(ply_element, "motion_"+str(i), np.zeros, (n_points,))
+                motion[:, i] = maybe_load_from_ply(ply_element, "motion_" + str(i), np.zeros, (n_points,))
 
             n_omega = 4 * self.cfg.rank_omega
             omegas = np.zeros((n_points, n_omega))
             for i in range(n_omega):
-                omegas[:, i] = maybe_load_from_ply(ply_element, "omega_"+str(i), np.zeros, (n_points,))
-            
+                omegas[:, i] = maybe_load_from_ply(ply_element, "omega_" + str(i), np.zeros, (n_points,))
+
             self._trbf_center = nn.Parameter(
                 torch.tensor(trbf_center, dtype=torch.float, device="cuda").requires_grad_(True)
             )
@@ -1069,32 +1098,35 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             self._omega = nn.Parameter(
                 torch.tensor(omegas, dtype=torch.float, device="cuda").requires_grad_(True)
             )
-            self.computedtrbfscale = torch.exp(self._trbf_scale) # precomputed
+            self.computedtrbfscale = torch.exp(self._trbf_scale)  # precomputed
 
         if self.cfg.enable_deformation:
             self._deformation = self._deformation.to("cuda")
-            self._deformation_table = torch.gt(torch.ones((self.get_xyz.shape[0]),device="cuda"),0) # everything deformed
-            
+            self._deformation_table = torch.gt(torch.ones((self.get_xyz.shape[0]), device="cuda"),
+                                               0)  # everything deformed
+
         if self.cfg.use_spline:
             self.init_cubic_spliner()
-       
+
     def load_deformation_model(self, path, name):
         print("loading model from exists{}".format(path))
-        weight_dict = torch.load(os.path.join(path, name+"_deformation.pth"),map_location="cuda")
+        weight_dict = torch.load(os.path.join(path, name + "_deformation.pth"), map_location="cuda")
         self._deformation.load_state_dict(weight_dict)
         self._deformation = self._deformation.to("cuda")
-        self._deformation_table = torch.gt(torch.ones((self.get_xyz.shape[0]),device="cuda"),0)
-        self._deformation_accum = torch.zeros((self.get_xyz.shape[0],3),device="cuda")
-        if os.path.exists(os.path.join(path, name+"_deformation_table.pth")):
-            self._deformation_table = torch.load(os.path.join(path, name+"_deformation_table.pth"),map_location="cuda")
-        if os.path.exists(os.path.join(path,name+"_deformation_accum.pth")):
-            self._deformation_accum = torch.load(os.path.join(path, name+"_deformation_accum.pth"),map_location="cuda")
+        self._deformation_table = torch.gt(torch.ones((self.get_xyz.shape[0]), device="cuda"), 0)
+        self._deformation_accum = torch.zeros((self.get_xyz.shape[0], 3), device="cuda")
+        if os.path.exists(os.path.join(path, name + "_deformation_table.pth")):
+            self._deformation_table = torch.load(os.path.join(path, name + "_deformation_table.pth"),
+                                                 map_location="cuda")
+        if os.path.exists(os.path.join(path, name + "_deformation_accum.pth")):
+            self._deformation_accum = torch.load(os.path.join(path, name + "_deformation_accum.pth"),
+                                                 map_location="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
-        
+
     def save_deformation_model(self, path, name):
-        torch.save(self._deformation.state_dict(),os.path.join(path, name+"_deformation.pth"))
-        torch.save(self._deformation_table,os.path.join(path, name+"_deformation_table.pth"))
-        torch.save(self._deformation_accum,os.path.join(path, name+"_deformation_accum.pth"))
+        torch.save(self._deformation.state_dict(), os.path.join(path, name + "_deformation.pth"))
+        torch.save(self._deformation_table, os.path.join(path, name + "_deformation_table.pth"))
+        torch.save(self._deformation_accum, os.path.join(path, name + "_deformation_accum.pth"))
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
         super().update_step(epoch, global_step, on_load_weights)

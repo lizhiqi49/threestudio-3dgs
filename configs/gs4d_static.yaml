@@ -5,10 +5,10 @@ seed: 0
 
 data_type: "single-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
-  image_path: ./load/images/hamburger_rgba.png
-  height: [128, 256, 512]
-  width: [128, 256, 512]
-  resolution_milestones: [200, 300]
+  image_path: ./load/images/anya_front_rgba.png
+  height: [ 128, 256, 512 ]
+  width: [ 128, 256, 512 ]
+  resolution_milestones: [ 200, 300 ]
   default_elevation_deg: 5.0
   default_azimuth_deg: 0.0
   default_camera_distance: 3.8
@@ -22,16 +22,16 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
     eval_height: 512
     eval_width: 512
     eval_batch_size: 1
-    elevation_range: [-10, 80]
-    azimuth_range: [-180, 180]
-    camera_distance_range: [3.8, 3.8]
-    fovy_range: [20.0, 20.0] # Zero123 has fixed fovy
+    elevation_range: [ -10, 80 ]
+    azimuth_range: [ -180, 180 ]
+    camera_distance_range: [ 3.8, 3.8 ]
+    fovy_range: [ 20.0, 20.0 ] # Zero123 has fixed fovy
     progressive_until: 0
     camera_perturb: 0.0
     center_perturb: 0.0
     up_perturb: 0.0
     light_position_perturb: 1.0
-    light_distance_range: [7.5, 10.0]
+    light_distance_range: [ 7.5, 10.0 ]
     eval_elevation_deg: ${data.default_elevation_deg}
     eval_camera_distance: ${data.default_camera_distance}
     eval_fovy_deg: ${data.default_fovy_deg}
@@ -46,8 +46,8 @@ system:
 
   geometry_type: "gaussian-splatting"
   geometry:
-    position_lr: [0, 0.001, 0.00002, 1000]
-    scale_lr: [0, 0.01, 0.001, 1000]
+    position_lr: [ 0, 0.001, 0.00002, 1000 ]
+    scale_lr: [ 0, 0.01, 0.001, 1000 ]
     feature_lr: 0.01
     opacity_lr: 0.05
     rotation_lr: 0.001
@@ -55,20 +55,20 @@ system:
     prune_interval: 100
     opacity_reset_interval: 100000
     densify_from_iter: 0
-    densify_until_iter: ${trainer.max_steps}
+    densify_until_iter: 1000
     prune_from_iter: 0
-    prune_until_iter: ${trainer.max_steps}
+    prune_until_iter: 1000
     densify_grad_threshold: 0.01
     min_opac_prune: 0.005
     split_thresh: 0.02
     radii2d_thresh: 1000
-
     sphere: False
-
     init_num_pts: 4096
     pc_init_radius: 0.5
     opacity_init: 0.05
     max_num: 500000
+    sugar_prune_at: ${system.sugar.prune_low_opacity_gaussians_at}
+    sugar_prune_threshold: ${system.sugar.prune_hard_opacity_threshold}
 
   exporter_type: "gaussian-mesh-exporter"
 
@@ -98,8 +98,8 @@ system:
     cond_azimuth_deg: ${data.default_azimuth_deg}
     cond_camera_distance: ${data.default_camera_distance}
     guidance_scale: 3.0
-    min_step_percent: [50, 0.7, 0.3, 200]  # (start_iter, start_val, end_val, end_iter)
-    max_step_percent: [50, 0.98, 0.8, 200]
+    min_step_percent: [ 50, 0.7, 0.3, 200 ]  # (start_iter, start_val, end_val, end_iter)
+    max_step_percent: [ 50, 0.98, 0.8, 200 ]
 
   prompt_processor_3d_type: null
   guidance_3d_type: null
@@ -116,23 +116,50 @@ system:
 
   loss:
     lambda_sds: 0.1
-    lambda_rgb: [100, 500., 1000., 400]
+    lambda_rgb: [ 100, 500., 1000., 400 ]
     lambda_mask: 50.
     lambda_depth: 0. # 0.05
     lambda_depth_rel: 0. # [0, 0, 0.05, 100]
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
+    lambda_opacity_binary: [1000, 0.1, 0.1, 1500]
+    lambda_density_regulation: [1500, 0.2, 0.2, 2500]
+    lambda_normal_regulation: [1500, 0.2, 0.2, 2500]
 
   optimizer:
     name: Adam
     args:
       lr: 0.01
-      betas: [0.9, 0.99]
+      betas: [ 0.9, 0.99 ]
       eps: 1.e-8
     params:
       background:
         lr: 0.001
+
+  sugar:
+    reset_neighbors_every: 100
+    start_regularization_from: 1500 # consistent with lambda_density_regulation
+    n_samples_for_sdf_regularization: 500000
+    start_sdf_better_normal_from: 1500 # consistent with lambda_normal_regulation
+    use_sdf_better_normal_loss: true
+    prune_hard_opacity_threshold: 0.5
+    prune_low_opacity_gaussians_at: 1500 # consistent with lambda opacity binary end
+
+#    sdf_sampling_scale_factor: 1.5
+#    sdf_sampling_proportional_to_volume: false
+#    use_sdf_estimation_loss: true
+#    use_sdf_better_normal_loss: true
+#    enforce_samples_to_be_on_surface: false
+#    sdf_estimation_mode: "density"
+#    density_threshold: 1.
+#    density_factor: 1.
+#    start_sdf_better_normal_from: 0 # 9000
+#    start_sdf_estimation_from: 0 # 9000
+#    use_projection_as_estimation: true
+#    normalize_by_sdf_std: false
+#    sample_only_in_gaussians_close_to_surface: false
+#    squared_sdf_estimation_loss: false
 
 
 trainer:
@@ -142,6 +169,7 @@ trainer:
   val_check_interval: 100
   enable_progress_bar: true
   precision: 32
+
 
 checkpoint:
   save_last: true # save at each validation time
