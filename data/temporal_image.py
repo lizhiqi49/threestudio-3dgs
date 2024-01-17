@@ -258,7 +258,8 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
             "width": self.width,
             "c2w": self.c2w4x4.repeat(self.num_frames, 1, 1),
             "fovy": self.fovy.repeat(self.num_frames),
-            "timestamp": self.timestamps
+            "timestamp": self.timestamps,
+            "frame_indices": self.frame_indices
         }
         if self.cfg.use_random_camera:
             batch_rand_cam = self.random_pose_generator.collate(None)

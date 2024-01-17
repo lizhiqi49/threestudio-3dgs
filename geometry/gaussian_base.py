@@ -181,6 +181,7 @@ class Camera(NamedTuple):
     world_view_transform: torch.Tensor
     full_proj_transform: torch.Tensor
     timestamp: torch.Tensor = None
+    frame_idx: torch.Tensor = None
 
 
 @threestudio.register("gaussian-splatting")

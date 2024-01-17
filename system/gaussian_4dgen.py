@@ -449,7 +449,8 @@ class Gaussian4DGen(BaseLift3DSystem):
                 {
                     "timestamp": torch.as_tensor(
                         [batch["index"] / batch["n_all_views"]], device=self.device
-                    )
+                    ),
+                    "frame_idx": torch.as_tensor(batch_idx, device=self.device)
                 }
             )
         out = self(batch)
@@ -569,7 +570,8 @@ class Gaussian4DGen(BaseLift3DSystem):
                 {
                     "timestamp": torch.as_tensor(
                         [batch["index"] / batch["n_all_views"]], device=self.device
-                    )
+                    ),
+                    "frame_idx": torch.as_tensor(batch_idx, device=self.device)
                 }
             )
         out = self(batch)

@@ -133,7 +133,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         # colors_precomp = pc.get_features(tforpoly).reshape(pc.get_xyz.shape[0], 3)
         # means3D = means3D + motion
         
-        means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_all(viewpoint_camera.timestamp)
+        means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_all(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
         
         shs = None
         cov3D_precomp = None
