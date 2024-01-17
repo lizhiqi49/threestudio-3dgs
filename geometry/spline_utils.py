@@ -223,8 +223,9 @@ class Spline(nn.Module):
             segment: The spline segment.
             u: The normalized position on the segment.
         """
-        assert torch.all(timestamps >= self.t_lower_bound)
-        assert torch.all(timestamps <= self.t_upper_bound)
+        # assert torch.all(timestamps >= self.t_lower_bound)
+        # assert torch.all(timestamps <= self.t_upper_bound)
+        timestamps = torch.clamp(timestamps, self.t_lower_bound + _EPS, self.t_upper_bound - _EPS)
         batch_size = timestamps.shape
         relative_time = timestamps - self.start_time
         normalized_time = relative_time / self.config.sampling_interval

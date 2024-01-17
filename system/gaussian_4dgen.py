@@ -18,6 +18,26 @@ from torchmetrics import PearsonCorrCoef
 
 from ..geometry.gaussian_base import BasicPointCloud, Camera
 
+from mmcv.ops import knn
+
+def prepare_nn_indices(xyz: Float[Tensor, "N_pts 3"], k=2) -> Int[Tensor, "N_pts k"]:
+        """ Prepare the indices of k nearest neighbors for each point """
+        xyz_input = xyz.float().cuda()
+        xyz_input = xyz_input.unsqueeze(0).contiguous()
+        nn_indices = knn(k, xyz_input, xyz_input, False)[0]
+        nn_indices: Int[Tensor, "N_pts k"] = nn_indices.transpose(0, 1).long()
+        return nn_indices
+    
+def compute_nn_distances(
+    xyz: Float[Tensor, "B N_pts 3"], indices: Int[Tensor, "N_pts k"]
+) -> Float[Tensor, "B N_pts k"]:
+    N, k = indices.shape
+    bs = xyz.shape[0]
+    dists = torch.norm(
+        xyz.repeat_interleave(k, dim=1) - xyz[:, indices.flatten(), :], dim=-1
+    ).reshape((bs, N, k))
+    return dists
+
 
 @threestudio.register("gaussian-splatting-4dgen-system")
 class Gaussian4DGen(BaseLift3DSystem):
@@ -124,6 +144,13 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         self.pearson = PearsonCorrCoef().to(self.device)
 
+        if C(self.cfg.loss.lambda_arap_reg, 0, 0) > 0:
+            static_xyz = self.geometry._xyz.data
+            self.gs_nn_indices = prepare_nn_indices(static_xyz, 10)
+            self.gs_nn_dists_static = compute_nn_distances(
+                static_xyz.unsqueeze(0), self.gs_nn_indices
+            )
+
     def training_substep(self, batch, batch_idx, guidance: str):
         """
         Args:
@@ -224,6 +251,36 @@ class Gaussian4DGen(BaseLift3DSystem):
                 (normal[:, 1:, :, :] - normal[:, :-1, :, :]).square().mean()
                 + (normal[:, :, 1:, :] - normal[:, :, :-1, :]).square().mean(),
             )
+
+        # ARAP regularization
+        if guidance == "ref" and self.C(self.cfg.loss.lambda_arap_reg) > 0 and self.global_step % self.cfg.freq.arap_reg == 0:
+            # xyz_timed = out["comp_xyz"]
+
+            rand_range_start = np.random.rand() * 0.8   # (0.0 ~ 0.8)
+            rand_timestamps = torch.as_tensor(
+                np.linspace(
+                    rand_range_start, 
+                    rand_range_start + 0.2, 
+                    10, 
+                    endpoint=True
+                ), 
+                dtype=torch.float32, 
+                device=self.device
+            )
+            xyz_timed = []
+            for t in rand_timestamps:
+                timed_outs = self.geometry.get_timed_all(t)
+                xyz_timed.append(timed_outs[0])
+            xyz_timed = torch.stack(xyz_timed, dim=0)
+            dists_timed = compute_nn_distances(xyz_timed, self.gs_nn_indices)
+            # loss_arap_reg = (
+            #     # F.mse_loss(dists_timed, self.gs_nn_dists_static.repeat(dists_timed.shape[0], 1, 1)) 
+            #     F.mse_loss(dists_timed[:-1], dists_timed[1:])
+            # )
+            # loss_arap_reg = F.mse_loss(dists_timed[:-1], dists_timed[1:])
+            loss_arap_reg = torch.abs(dists_timed[:-1] - dists_timed[1:]).mean()
+            set_loss("arap_reg", loss_arap_reg)
+
 
         loss = 0.0
         for name, value in loss_terms.items():

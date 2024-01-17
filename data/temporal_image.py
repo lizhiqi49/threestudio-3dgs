@@ -137,9 +137,9 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         self.prev_height = self.height
 
         self.frame_indices = torch.arange(self.num_frames, dtype=torch.long)
-        self.timestamps = torch.arange(self.num_frames, dtype=torch.float32)
-        if self.cfg.norm_timestamp:
-            self.timestamps = self.timestamps / self.num_frames
+        self.timestamps = torch.as_tensor(
+            np.linspace(0, 1, self.num_frames, endpoint=True), dtype=torch.float32
+        )
 
     # Copied from threestudio.data.image.SingleImageDataBase.load_images
     def load_single_frame(self, frame_path):

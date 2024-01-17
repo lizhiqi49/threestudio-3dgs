@@ -49,7 +49,7 @@ system:
   geometry_type: "spacetime-gaussian-splatting"
   geometry:
     use_spline: true
-    num_frames: 8
+    num_frames: 12
 
     enable_static: false
     position_lr: 0.001
@@ -137,6 +137,7 @@ system:
   freq:
     ref_only_steps: 0
     guidance_eval: 0
+    arap_reg: 1
 
   loggers:
     wandb:
@@ -154,6 +155,7 @@ system:
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
+    lambda_arap_reg: 10000.
 
   optimizer:
     name: Adam

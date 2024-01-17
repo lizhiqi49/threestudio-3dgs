@@ -330,7 +330,7 @@ class SpacetimeGaussianModel(GaussianBaseModel):
     
     def init_cubic_spliner(self):
         n_ctrl_knots = self.num_frames
-        t_interv = 1 / (n_ctrl_knots - 3)   # exclude start and end point
+        t_interv = torch.as_tensor(1 / (n_ctrl_knots - 3)).cuda()   # exclude start and end point
         spline_cfg = SplineConfig(degree=3, sampling_interval=t_interv)
         self.spliner = Spline(spline_cfg)
         self.spliner.data = pp.identity_SE3(1, self.num_frames)
@@ -342,8 +342,8 @@ class SpacetimeGaussianModel(GaussianBaseModel):
         ctrl_knots_rot = []
         ts = torch.as_tensor(
             np.linspace(
-                self.spliner.start_time, 
-                self.spliner.end_time, 
+                self.spliner.start_time.cpu().numpy(), 
+                self.spliner.end_time.cpu().numpy(), 
                 self.num_frames, 
                 endpoint=True
             ),
