@@ -52,6 +52,68 @@ def compute_nn_distances(
     return dists
 
 
+### Attempt to import svd batch method. If not provided, use default method
+### Sourced from https://github.com/KinglittleQ/torch-batch-svd/blob/master/torch_batch_svd/include/utils.h
+try:
+	from torch_batch_svd import svd as batch_svd
+except ImportError:
+	print("torch_batch_svd not installed. Using torch.svd instead")
+	batch_svd = torch.svd
+
+
+def compute_nn_weights(nn_dists: Float[Tensor, "*B N_pts k"]) -> Float[Tensor, "*B N_pts k"]:
+    return F.softmax(nn_dists ** 2, dim=-1)
+
+def compute_arap_energy(
+    xyz: Float[Tensor, "N_pts 3"], 
+    xyz_prime: Float[Tensor, "N_pts 3"],
+    nn_indices: Int[Tensor, "N_pts k"],
+    nn_dists: Float[Tensor, "N_pts k"] = None,
+    nn_weights: Float[Tensor, "N_pts k"] = None,
+) -> Float:
+    n_pts, n_neighbors = nn_indices.shape 
+
+    if nn_weights is None:
+        if nn_dists is None:
+            nn_dists = compute_nn_distances(xyz.unsqueeze(0), nn_indices.unsqueeze(0))[0]
+        nn_weights = compute_nn_weights(nn_dists)
+    w: Float[Tensor, "N_pts k"] = nn_weights   # softmax of negative squared distance
+
+    edge_mtx: Float[Tensor, "N_pts k 3"] = (
+        xyz.unsqueeze(1).repeat(1, n_neighbors, 1) 
+        - xyz[nn_indices.flatten()].reshape(n_pts, n_neighbors, 3)
+    )
+    edge_mtx_prime = (
+        xyz_prime.unsqueeze(1).repeat(1, n_neighbors, 1)
+        - xyz[nn_indices.flatten()].reshape(n_pts, n_neighbors, 3)
+    )
+
+    # Calculate covariance matrix in bulk
+    D = torch.diag_embed(w, dim1=1, dim2=2)
+    S = torch.bmm(edge_mtx.permute(0, 2, 1), torch.bmm(D, edge_mtx_prime))
+
+    # Calculate rotations
+    U, sig, W = batch_svd(S)
+    R = torch.bmm(W, U.permute(0, 2, 1))
+
+    # Need to flip the column of U corresponding to smallest singular value
+	# for any det(Ri) <= 0
+    entries_to_flip = torch.nonzero(torch.det(R) <= 0, as_tuple=False).flatten()  # idxs where det(R) <= 0
+    if len(entries_to_flip) > 0:
+        Umod = U.clone()
+        cols_to_flip = torch.argmin(sig[entries_to_flip], dim=1)  # Get minimum singular value for each entry
+        Umod[entries_to_flip, :, cols_to_flip] *= -1  # flip cols
+        R[entries_to_flip] = torch.bmm(W[entries_to_flip], Umod[entries_to_flip].permute(0, 2, 1))
+
+    # Compute energy
+    rot_rigid = torch.bmm(R, edge_mtx.permute(0, 2, 1)).permute(0, 2, 1)
+    stretch_vec = edge_mtx_prime - rot_rigid
+    stretch_norm = torch.norm(stretch_vec, dim=2) ** 2
+    energy = (w * stretch_norm).sum()
+
+    return energy
+
+
 @threestudio.register("gaussian-splatting-4dgen-system")
 class Gaussian4DGen(BaseLift3DSystem):
     @dataclass
@@ -291,7 +353,7 @@ class Gaussian4DGen(BaseLift3DSystem):
                 device=self.device
             )
             # ARAP regularization
-            if self.C(self.cfg.loss.lambda_arap_reg) > 0:
+            if self.C(self.cfg.loss.lambda_lite_arap_reg) > 0 or self.C(self.cfg.loss.lambda_full_arap_reg):
                 xyz_timed = []
                 for t in rand_timestamps:
                     xyz_t = self.geometry.get_timed_xyz(t)
@@ -305,13 +367,23 @@ class Gaussian4DGen(BaseLift3DSystem):
                     dim=-1
                 )
                 nn_idx = self.knn_idx[ref_timestamp_idx]
-                nn_dists_timed = compute_nn_distances(xyz_timed, nn_idx)
-                nn_dists_ref = self.knn_dists[ref_timestamp_idx]
-                loss_arap_reg = (
-                    torch.abs(nn_dists_timed[:-1] - nn_dists_timed[1:]).mean()
-                    + torch.abs(nn_dists_timed - nn_dists_ref).mean()
-                )
-                set_loss("arap_reg", loss_arap_reg)
+                if self.C(self.cfg.loss.lambda_lite_arap_reg) > 0:
+                    nn_dists_timed = compute_nn_distances(xyz_timed, nn_idx)
+                    nn_dists_ref = self.knn_dists[ref_timestamp_idx]
+                    loss_arap_reg = (
+                        torch.abs(nn_dists_timed[:-1] - nn_dists_timed[1:]).mean()
+                        # + torch.abs(nn_dists_timed - nn_dists_ref).mean()
+                    )
+                    set_loss("arap_reg", loss_arap_reg)
+                if self.C(self.cfg.loss.lambda_full_arap_reg) > 0:
+                    loss_full_arap = 0.
+                    for i in ref_timestamp_idx:
+                        loss_full_arap += compute_arap_energy(
+                            xyz_timed[i], self.ref_points[i], self.knn_idx[i], 
+                            nn_weights=self.knn_arap_weights[i]
+                        )
+                    loss_full_arap = loss_full_arap * 1 / len(ref_timestamp_idx)
+                    set_loss("full_arap_reg", loss_full_arap)
 
             # SuGaR density regulation loss
             if self.C(self.cfg.loss.lambda_density_regulation) > 0:
@@ -358,8 +430,10 @@ class Gaussian4DGen(BaseLift3DSystem):
             points = self.geometry._xyz.unsqueeze(0)
         
         knns = knn_points(points, points, K=self.knn_to_track)
-        self.knn_idx = knns.idx
-        self.knn_dists = knns.dists
+        self.knn_idx: Int[Tensor, "T N_pts k"] = knns.idx
+        self.knn_dists: Float[Tensor, "T N_pts k"] = knns.dists
+        self.knn_arap_weights: Float[Tensor, "T N_pts k"] = compute_nn_weights(self.knn_dists)
+        self.ref_points = points
 
         if self.sugar is not None:
             if timestamps is not None:
