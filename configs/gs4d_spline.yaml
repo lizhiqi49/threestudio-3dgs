@@ -7,7 +7,7 @@ data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   video_frames_dir: ./load/videos/anya2
   norm_timestamp: true
-  num_frames: 10
+  num_frames: 4
   height: [256, 512]
   width: [256, 512]
   resolution_milestones: [100]
@@ -20,7 +20,7 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   random_camera: # threestudio/data/uncond.py -> RandomCameraDataModuleConfig
     height: 256
     width: 256
-    batch_size: 2
+    batch_size: 4
     eval_height: 512
     eval_width: 512
     eval_batch_size: 1
@@ -49,7 +49,7 @@ system:
   geometry_type: "spacetime-gaussian-splatting"
   geometry:
     use_spline: true
-    num_frames: 12
+    num_frames: 6
 
     enable_static: false
     position_lr: 0.001
@@ -149,18 +149,19 @@ system:
   loss:
     lambda_sds: 0.1
     lambda_sds_vid: 0
-    lambda_rgb: 10000
+    lambda_rgb: [100, 10000, 100000, 101]
     lambda_mask: 10000.
     lambda_depth: 0. # 0.05
     lambda_depth_rel: 0. # [0, 0, 0.05, 100]
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
-    lambda_lite_arap_reg: 1000.
-    lambda_full_arap_reg: [100, 0, 10, 101]
+    lambda_lite_arap_reg: [500, 0, 1000., 501]
+    lambda_full_arap_reg: [500, 0, 1, 501]
     lambda_opacity_binary: 0. # [ 0, 0.1, 0.1, 1500 ]
-    lambda_density_regulation: [100, 0, 10, 101]
-    lambda_normal_regulation: [100, 0, 1, 101]
+    lambda_density_regulation: [500, 0, 1, 501]
+    lambda_normal_regulation: [500, 0, 1, 501]
+    lambda_ref_gs: [100, 100, 1000, 101]
 
 
   optimizer:
@@ -194,4 +195,4 @@ trainer:
 checkpoint:
   save_last: true # save at each validation time
   save_top_k: -1
-  every_n_train_steps: 1000 # ${trainer.max_steps}
+  every_n_train_steps: 100 # ${trainer.max_steps}

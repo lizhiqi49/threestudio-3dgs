@@ -25,6 +25,7 @@ from ..sugar.sugar_model import SuGaR
 
 from mmcv.ops import knn
 from pytorch3d.ops import knn_points
+import pypose as pp
 
 def prepare_nn_indices(xyz: Float[Tensor, "N_pts 3"], k=2) -> Int[Tensor, "N_pts k"]:
         """ Prepare the indices of k nearest neighbors for each point """
@@ -157,6 +158,10 @@ class Gaussian4DGen(BaseLift3DSystem):
         super().configure()
         self.automatic_optimization = False
         self.stage = self.cfg.stage
+
+        self.geometry: SpacetimeGaussianModel
+        self.gs_original_xyz = self.geometry._xyz.clone()
+        self.gs_original_rot = self.geometry._rotation.clone()
 
     def configure_optimizers(self):
         optim = self.geometry.optimizer
@@ -337,6 +342,18 @@ class Gaussian4DGen(BaseLift3DSystem):
                 -(vis_opacities * torch.log(vis_opacities + 1e-10)
                 + (1 - vis_opacities) * torch.log(1 - vis_opacities + 1e-10)).mean()
             )
+        
+        if self.stage != "static" and guidance == "ref" and self.C(self.cfg.loss.lambda_ref_gs) > 0:
+            xyz_0, _, rot_0, _, _ = self.geometry.get_timed_all(torch.as_tensor(0, dtype=torch.float32, device=self.device))
+            # loss_ref_gs = F.mse_loss(
+            #     pp.SE3(torch.cat([xyz_0, rot_0], dim=-1)).tensor(),
+            #     pp.SE3(torch.cat([self.gs_original_xyz, self.gs_original_rot], dim=-1)).tensor()
+            # )
+            loss_ref_gs = torch.abs(
+                pp.SE3(torch.cat([xyz_0, rot_0], dim=-1)).tensor()
+                - pp.SE3(torch.cat([self.gs_original_xyz, self.gs_original_rot], dim=-1)).tensor()
+            ).mean()
+            set_loss("ref_gs", loss_ref_gs)
 
         # Smooth regularization
         if self.stage == "motion" and guidance == "ref" and self.global_step % self.cfg.freq.smooth_reg == 0:
@@ -374,7 +391,7 @@ class Gaussian4DGen(BaseLift3DSystem):
                         torch.abs(nn_dists_timed[:-1] - nn_dists_timed[1:]).mean()
                         # + torch.abs(nn_dists_timed - nn_dists_ref).mean()
                     )
-                    set_loss("arap_reg", loss_arap_reg)
+                    set_loss("lite_arap_reg", loss_arap_reg)
                 if self.C(self.cfg.loss.lambda_full_arap_reg) > 0:
                     loss_full_arap = 0.
                     for i in ref_timestamp_idx:
