@@ -151,6 +151,10 @@ class Gaussian4DGen(BaseLift3DSystem):
         # KNN configs
         knn_to_track: int = 10
 
+        # Intermediate frames
+        num_inter_frames: int = 10
+        length_inter_frames: float = 0.2
+
     cfg: Config
 
     def configure(self):
@@ -196,6 +200,15 @@ class Gaussian4DGen(BaseLift3DSystem):
         super().on_fit_start()
         # no prompt processor
         self.guidance_zero123 = threestudio.find(self.cfg.guidance_zero123_type)(self.cfg.guidance_zero123)
+
+        # Maybe use 2D diffusion prior
+        self.enable_2d_sds = self.cfg.guidance_2d_type is not None and C(self.cfg.loss.lambda_sds_2d, 0, 0) > 0
+        if self.enable_2d_sds:
+            self.prompt_processor_2d = threestudio.find(self.cfg.prompt_processor_2d_type)(self.cfg.prompt_processor_2d)
+            self.guidance_2d = threestudio.find(self.cfg.guidance_2d_type)(self.cfg.guidance_2d)
+        else:
+            self.prompt_processor_2d = None
+            self.guidance_2d = None
 
         # Maybe use ImageDream
         self.enable_imagedream = self.cfg.guidance_3d_type is not None and C(self.cfg.loss.lambda_sds_3d, 0, 0) > 0
@@ -316,7 +329,7 @@ class Gaussian4DGen(BaseLift3DSystem):
                 guidance_eval=guidance_eval,
             )
             # claforte: TODO: rename the loss_terms keys
-            set_loss("sds", guidance_out["loss_sds"])
+            set_loss("sds_zero123", guidance_out["loss_sds"])
 
         if self.C(self.cfg.loss.lambda_normal_smooth) > 0:
             if "comp_normal" not in out:
@@ -354,68 +367,7 @@ class Gaussian4DGen(BaseLift3DSystem):
                 - pp.SE3(torch.cat([self.gs_original_xyz, self.gs_original_rot], dim=-1)).tensor()
             ).mean()
             set_loss("ref_gs", loss_ref_gs)
-
-        # Smooth regularization
-        if self.stage == "motion" and guidance == "ref" and self.global_step % self.cfg.freq.smooth_reg == 0:
-            # Densely sample frames in a smaller time range
-            rand_range_start = np.random.rand() * 0.8   # (0.0 ~ 0.8)
-            rand_timestamps = torch.as_tensor(
-                np.linspace(
-                    rand_range_start, 
-                    rand_range_start + 0.2, 
-                    10, 
-                    endpoint=True
-                ), 
-                dtype=torch.float32, 
-                device=self.device
-            )
-            # ARAP regularization
-            if self.C(self.cfg.loss.lambda_lite_arap_reg) > 0 or self.C(self.cfg.loss.lambda_full_arap_reg):
-                xyz_timed = []
-                for t in rand_timestamps:
-                    xyz_t = self.geometry.get_timed_xyz(t)
-                    xyz_timed.append(xyz_t)
-                xyz_timed = torch.stack(xyz_timed, dim=0)
-
-                # Get the indices of nearest reference timestamps
-                ref_timestamps = batch.get("timestamp")
-                ref_timestamp_idx = torch.argmin(
-                    (rand_timestamps[..., None] - ref_timestamps[None, ...]).abs(),
-                    dim=-1
-                )
-                nn_idx = self.knn_idx[ref_timestamp_idx]
-                if self.C(self.cfg.loss.lambda_lite_arap_reg) > 0:
-                    nn_dists_timed = compute_nn_distances(xyz_timed, nn_idx)
-                    nn_dists_ref = self.knn_dists[ref_timestamp_idx]
-                    loss_arap_reg = (
-                        torch.abs(nn_dists_timed[:-1] - nn_dists_timed[1:]).mean()
-                        # + torch.abs(nn_dists_timed - nn_dists_ref).mean()
-                    )
-                    set_loss("lite_arap_reg", loss_arap_reg)
-                if self.C(self.cfg.loss.lambda_full_arap_reg) > 0:
-                    loss_full_arap = 0.
-                    for i in ref_timestamp_idx:
-                        loss_full_arap += compute_arap_energy(
-                            xyz_timed[i], self.ref_points[i], self.knn_idx[i], 
-                            nn_weights=self.knn_arap_weights[i]
-                        )
-                    loss_full_arap = loss_full_arap * 1 / len(ref_timestamp_idx)
-                    set_loss("full_arap_reg", loss_full_arap)
-
-            # SuGaR density regulation loss
-            if self.C(self.cfg.loss.lambda_density_regulation) > 0:
-                coarse_args = EasyDict(
-                    {"current_step": self.true_global_step,
-                    "outputs": out,
-                    "n_samples_for_sdf_regularization": self.cfg.sugar.n_samples_for_sdf_regularization,
-                    "use_sdf_better_normal_loss": self.cfg.sugar.use_sdf_better_normal_loss,
-                    "start_sdf_better_normal_from": self.cfg.sugar.start_sdf_better_normal_from,
-                    "timestamp": rand_timestamps
-                    })
-                dloss = self.sugar.coarse_density_regulation(coarse_args)
-                set_loss("density_regulation", dloss['density_regulation'])
-                set_loss("normal_regulation", dloss['normal_regulation'])
-
+ 
         loss = 0.0
         for name, value in loss_terms.items():
             self.log(f"train/{name}", value)
@@ -433,6 +385,113 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         out.update({"loss": loss})
         return out
+    
+    def training_substep_inter_frames(self, batch, batch_idx):
+        loss_terms = {}
+        loss_prefix = "loss_interf_"
+
+        def set_loss(name, value):
+            loss_terms[f"{loss_prefix}{name}"] = value
+
+        # Densely sample frames in a smaller time range
+        rand_range_start = np.random.rand() * (1 - self.cfg.length_inter_frames)
+        rand_timestamps = torch.as_tensor(
+            np.linspace(
+                rand_range_start, 
+                rand_range_start + self.cfg.length_inter_frames, 
+                self.cfg.num_inter_frames, 
+                endpoint=True
+            ), 
+            dtype=torch.float32, 
+            device=self.device
+        )
+
+        if self.guidance_2d is not None and self.C(self.cfg.loss.lambda_sds_2d) > 0:
+            batch_for_2d = {
+                "c2w": batch["c2w"][:1].repeat(self.cfg.num_inter_frames, 1, 1),
+                "fovy": batch["fovy"][:1].repeat(self.cfg.num_inter_frames, ),
+                "elevation": batch["elevation"].repeat(self.cfg.num_inter_frames, ),
+                "azimuth": batch["azimuth"].repeat(self.cfg.num_inter_frames, ),
+                "camera_distances": batch["camera_distances"].repeat(self.cfg.num_inter_frames, ),
+                "timestamp": rand_timestamps,
+                "width": batch["width"],
+                "height": batch["height"],
+                "ambient_ratio": 1.0,
+            }
+            out_2d = self(batch_for_2d)
+            prompt_utils_2d = self.prompt_processor_2d()
+            guidance_out = self.guidance_2d(
+                out_2d["comp_rgb"],
+                prompt_utils_2d,
+                **batch_for_2d,
+                rgb_as_latents=False,
+                # guidance_eval=guidance_eval,
+            )
+            set_loss("sds_2d", guidance_out["loss_sds"])
+            
+        # ARAP regularization
+        if self.C(self.cfg.loss.lambda_lite_arap_reg) > 0 or self.C(self.cfg.loss.lambda_full_arap_reg):
+            xyz_timed = []
+            for t in rand_timestamps:
+                xyz_t = self.geometry.get_timed_xyz(t)
+                xyz_timed.append(xyz_t)
+            xyz_timed = torch.stack(xyz_timed, dim=0)
+
+            # Get the indices of nearest reference timestamps
+            ref_timestamps = batch.get("timestamp")
+            ref_timestamp_idx = torch.argmin(
+                (rand_timestamps[..., None] - ref_timestamps[None, ...]).abs(),
+                dim=-1
+            )
+            nn_idx = self.knn_idx[ref_timestamp_idx]
+            if self.C(self.cfg.loss.lambda_lite_arap_reg) > 0:
+                nn_dists_timed = compute_nn_distances(xyz_timed, nn_idx)
+                nn_dists_ref = self.knn_dists[ref_timestamp_idx]
+                loss_arap_reg = (
+                    torch.abs(nn_dists_timed[:-1] - nn_dists_timed[1:]).mean()
+                    # + torch.abs(nn_dists_timed - nn_dists_ref).mean()
+                )
+                set_loss("lite_arap_reg", loss_arap_reg)
+            if self.C(self.cfg.loss.lambda_full_arap_reg) > 0:
+                loss_full_arap = 0.
+                for i in ref_timestamp_idx:
+                    loss_full_arap += compute_arap_energy(
+                        xyz_timed[i], self.ref_points[i], self.knn_idx[i], 
+                        nn_weights=self.knn_arap_weights[i]
+                    )
+                loss_full_arap = loss_full_arap * 1 / len(ref_timestamp_idx)
+                set_loss("full_arap_reg", loss_full_arap)
+
+        # SuGaR density regulation loss
+        if self.C(self.cfg.loss.lambda_density_regulation) > 0:
+            coarse_args = EasyDict(
+                {"current_step": self.true_global_step,
+                # "outputs": out,
+                "n_samples_for_sdf_regularization": self.cfg.sugar.n_samples_for_sdf_regularization,
+                "use_sdf_better_normal_loss": self.cfg.sugar.use_sdf_better_normal_loss,
+                "start_sdf_better_normal_from": self.cfg.sugar.start_sdf_better_normal_from,
+                "timestamp": rand_timestamps
+                })
+            dloss = self.sugar.coarse_density_regulation(coarse_args)
+            set_loss("density_regulation", dloss['density_regulation'])
+            set_loss("normal_regulation", dloss['normal_regulation'])
+
+        loss = 0.0
+        for name, value in loss_terms.items():
+            self.log(f"train/{name}", value)
+            if name.startswith(loss_prefix):
+                loss_weighted = value * self.C(
+                    self.cfg.loss[name.replace(loss_prefix, "lambda_")]
+                )
+                self.log(f"train/{name}_w", loss_weighted)
+                loss += loss_weighted
+
+        for name, value in self.cfg.loss.items():
+            self.log(f"train_params/{name}", self.C(value))
+
+        self.log(f"train/loss_interf", loss)
+
+        return loss
     
     @torch.no_grad()
     def reset_neighbors(self, timestamps=None):
@@ -502,6 +561,9 @@ class Gaussian4DGen(BaseLift3DSystem):
         out_ref = self.training_substep(batch, batch_idx, guidance="ref")
         total_loss += out_ref["loss"]
 
+        if self.global_step > self.cfg.freq.milestone_inter_frame_reg and self.global_step % self.cfg.freq.inter_frame_reg == 0:
+            total_loss += self.training_substep_inter_frames(batch, batch_idx)
+
         self.log("train/loss", total_loss, prog_bar=True)
 
         out = out_zero123
@@ -520,12 +582,6 @@ class Gaussian4DGen(BaseLift3DSystem):
         )
         opt.step()
         opt.zero_grad(set_to_none=True)
-
-        ## TODO : add sugar regulation loss
-        """
-            1. add opacity cross entropy loss between [start step, end step]
-            2. add density regulation loss
-        """
 
         return {"loss": total_loss}
 

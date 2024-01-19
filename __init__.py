@@ -25,4 +25,4 @@ from .renderer import (
 )
 from .system import gaussian_mvdream, gaussian_splatting, gaussian_zero123, gaussian_4dgen
 from .data import temporal_image
-from .guidance import temporal_stable_zero123_guidance
+from .guidance import temporal_stable_zero123_guidance, stable_diffusion_lora_guidance
