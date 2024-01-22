@@ -299,6 +299,10 @@ class SpacetimeGaussianModel(GaussianBaseModel):
 
         if self.cfg.use_spline:
             means3D, rotations = self._spline_interp(timestamp[:, 0])
+            # !!!
+            # The order of quaternions is different between in 3D Gaussian and in pypose
+            # Make an adjustment here
+            rotations = rotations[..., [3, 0, 1, 2]]
         else:
             if self.cfg.enable_deformation:
                 means3D, scales, rotations, opacity = self._deformation(
@@ -384,7 +388,11 @@ class SpacetimeGaussianModel(GaussianBaseModel):
             ctrl_knots_rot.append(rot)
         ctrl_knots_xyz = torch.stack(ctrl_knots_xyz, dim=0)
         ctrl_knots_rot = torch.stack(ctrl_knots_rot, dim=0)
-
+        
+        # !!!
+        # The order of quaternions is different between in 3D Gaussian and in pypose
+        # Make an adjustment here
+        ctrl_knots_rot = ctrl_knots_rot[..., [1, 2, 3, 0]]
         self.spliner.data: Float[pp.LieTensor, "N_pts, N_ctrlknots, 7"]
         self.spliner.data = pp.SE3(
             torch.cat([ctrl_knots_xyz, ctrl_knots_rot], dim=-1).permute(1, 0, 2)
