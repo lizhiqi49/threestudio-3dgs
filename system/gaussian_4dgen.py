@@ -454,12 +454,21 @@ class Gaussian4DGen(BaseLift3DSystem):
                 set_loss("lite_arap_reg", loss_arap_reg)
             if self.C(self.cfg.loss.lambda_full_arap_reg) > 0:
                 loss_full_arap = 0.
+                # Between sampled frames and key frames
                 for i in ref_timestamp_idx:
                     loss_full_arap += compute_arap_energy(
-                        xyz_timed[i], self.ref_points[i], self.knn_idx[i], 
+                        self.ref_points[i], xyz_timed[i], self.knn_idx[i], 
                         nn_weights=self.knn_arap_weights[i]
                     )
-                loss_full_arap = loss_full_arap * 1 / len(ref_timestamp_idx)
+
+                # Among key frames
+                for i in range(self.ref_points.shape[0] - 1):
+                    loss_full_arap += compute_arap_energy(
+                        self.ref_points[i], self.ref_points[i+1], self.knn_idx[i],
+                        nn_weights=self.knn_arap_weights[i]
+                    )
+                
+                # loss_full_arap = loss_full_arap * 1 / len(ref_timestamp_idx)
                 set_loss("full_arap_reg", loss_full_arap)
 
         # SuGaR density regulation loss
