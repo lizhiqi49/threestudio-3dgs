@@ -255,20 +255,19 @@ class Spline(nn.Module):
     ):
         N = ctrl_knots.shape[0]  # (N_pts,)
         interpolations = u.shape[-1]
+        # If u only has one dim, broadcast it to all batches. This means same interpolations for all batches.
+        # Otherwise, u should have the same batch size as the control knots (*batch_size, interpolations).
+        if u.dim() == 1:
+            u = u.tile((N, 1))  # (*batch_size, interpolations)
+        if enable_eps:
+            u = torch.clip(u, _EPS, 1.0 - _EPS)
+
+        uu = u * u
+        uuu = uu * u
+        oos = 1.0 / 6.0  # one over six
+
         if name == "xyz":
             assert ctrl_knots.shape[-1] == 3
-
-            # If u only has one dim, broadcast it to all batches. This means same interpolations for all batches.
-            # Otherwise, u should have the same batch size as the control knots (*batch_size, interpolations).
-            if u.dim() == 1:
-                u = u.tile((N, 1))  # (*batch_size, interpolations)
-            if enable_eps:
-                u = torch.clip(u, _EPS, 1.0 - _EPS)
-
-            uu = u * u
-            uuu = uu * u
-            oos = 1.0 / 6.0  # one over six
-
             # t coefficients
             coeffs_t = torch.stack([
                 oos - 0.5 * u + 0.5 * uu - oos * uuu,
@@ -289,10 +288,10 @@ class Spline(nn.Module):
             ], dim=-2)
 
             # spline q
-            q_adjacent = ctrl_knots[..., :-1, :].rotation().Inv() @ ctrl_knots[..., 1:, :].rotation()
+            q_adjacent = ctrl_knots[..., :-1, :].Inv() @ ctrl_knots[..., 1:, :]
             r_adjacent = q_adjacent.Log()
             q_ts = pp.Exp(pp.so3(pp.bvv(coeffs_r, r_adjacent)))
-            q0 = ctrl_knots[..., 0, :].rotation()  # (*batch_size, 4)
+            q0 = ctrl_knots[..., 0, :]  # (*batch_size, 4)
             q_ts = torch.cat([
                 q0.unsqueeze(-2).tile((interpolations, 1)).unsqueeze(-3),
                 q_ts

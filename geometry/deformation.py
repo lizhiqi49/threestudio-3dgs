@@ -417,11 +417,20 @@ class Deformation(nn.Module):
         # print("deformation value:","pts:",torch.abs(dx).mean(),"rotation:",torch.abs(dr).mean())
 
         return pts, scales, rotations, opacity
+    
     def forward_dynamic_xyz(self, rays_pts_emb, time_emb):
         hidden = self.query_time(rays_pts_emb, None, None, time_emb).float()
         dx = self.pos_deform(hidden)
         pts = rays_pts_emb[:, :3] + dx
         return pts
+    
+    def forward_dynamic_xyz_and_rotation(self, rays_pts_emb, time_emb):
+        hidden = self.query_time(rays_pts_emb, None, None, time_emb).float()
+        dx = self.pos_deform(hidden)
+        # pts = rays_pts_emb[:, :3] + dx
+        dr = self.rotations_deform(hidden)
+        return dx, dr
+
 
     def get_mlp_parameters(self):
         parameter_list = []
@@ -494,6 +503,9 @@ class DeformationNetwork(nn.Module):
         return means3D, scales, rotations, opacity
     def forward_dynamic_xyz(self, point, times_sel):
         return self.deformation_net.forward_dynamic_xyz(point, times_sel)
+    
+    def forward_dg_trans_and_rotation(self, point, times_sel):
+        return self.deformation_net.forward_dynamic_xyz_and_rotation(point, times_sel)
     
     def get_mlp_parameters(self):
         return self.deformation_net.get_mlp_parameters() + list(self.timenet.parameters())
