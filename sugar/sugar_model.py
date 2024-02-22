@@ -81,7 +81,6 @@ class SuGaR():
             knn_to_track (int, optional): Number of KNN to track. Defaults to 16.
             surface_mesh_to_bind (None, optional): Surface mesh to bind the Gaussians to. Defaults to None.
             beta_mode (str, optional): Whether to use a learnable beta, or to average the beta values. Defaults to 'average'.
-
         """
 
         self.gaussians = gaussians

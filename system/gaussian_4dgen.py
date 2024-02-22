@@ -1,3 +1,4 @@
+import json
 import os
 import random
 from dataclasses import dataclass, field
@@ -13,7 +14,7 @@ import torch.nn.functional as F
 from threestudio.systems.base import BaseLift3DSystem
 from threestudio.systems.utils import parse_optimizer, parse_scheduler
 from threestudio.utils.loss import tv_loss
-from threestudio.utils.ops import get_cam_info_gaussian
+from threestudio.utils.ops import get_cam_info_gaussian, convert_pose
 from threestudio.utils.typing import *
 from threestudio.utils.misc import C
 from torch.cuda.amp import autocast
@@ -80,7 +81,8 @@ class Gaussian4DGen(BaseLift3DSystem):
             colors=np.zeros((num_pts, 3)),
             normals=np.zeros((num_pts, 3)),
         )
-        self.geometry.create_from_pcd(pcd, self.geometry.cfg.spatial_lr_scale)
+        # if hasattr(self.geometry.cfg, "spatial_lr_scale"):
+        self.geometry.create_from_pcd(pcd, self.geometry.cfg.get("spatial_lr_scale", 1))
         self.geometry.training_setup()
         # return
         super().on_load_checkpoint(checkpoint)
@@ -243,7 +245,7 @@ class Gaussian4DGen(BaseLift3DSystem):
             )
 
         ## density regulation loss
-        if self.C(self.cfg.loss.lambda_density_regulation, "interval") > 0:
+        if hasattr(self, 'sugar') and self.C(self.cfg.loss.lambda_density_regulation, "interval") > 0:
             coarse_args = EasyDict(
                 {"current_step": self.true_global_step,
                  "outputs": out,
@@ -333,7 +335,7 @@ class Gaussian4DGen(BaseLift3DSystem):
         return {"loss": total_loss}
 
     def on_validation_epoch_start(self) -> None:
-        if self.geometry.cfg.use_spline:
+        if self.stage == 'motion' and self.geometry.cfg.use_spline:
             self.geometry.compute_control_knots()
             self.geometry.spliner.update_end_time()
 
@@ -440,6 +442,12 @@ class Gaussian4DGen(BaseLift3DSystem):
             name="validation_epoch_end",
             step=self.true_global_step,
         )
+
+        # debug: save ply at each validation step
+        plysavepath = os.path.join(self.get_save_dir(), f"point_cloud_it{self.true_global_step}.ply")
+        self.geometry.save_ply(plysavepath)
+        # debug
+
         if self.stage != "static":
             filestem = f"it{self.true_global_step}-val-ref"
             self.save_img_sequence(
@@ -453,7 +461,7 @@ class Gaussian4DGen(BaseLift3DSystem):
             )
 
     def on_test_epoch_start(self) -> None:
-        if self.geometry.cfg.use_spline:
+        if self.stage != "static" and self.geometry.cfg.use_spline:
             self.geometry.compute_control_knots()
             self.geometry.spliner.update_end_time()
 
@@ -466,6 +474,20 @@ class Gaussian4DGen(BaseLift3DSystem):
                     )
                 }
             )
+
+        # debug
+        # T_c2w = convert_pose(batch['c2w'][0].cpu()).numpy()
+        # idx = batch['index'].item()
+        # pos = T_c2w[:3, 3]
+        # rot = T_c2w[:3, :3]
+        # serializable_array_2d = [x.tolist() for x in rot]
+        # if idx == 0:
+        #     self.camera_jsn = []
+        # self.camera_jsn.append({"index": idx, "rotation": serializable_array_2d, "position": pos.tolist()})
+        # if idx == 119:
+        #     with open("output.json", 'w') as f:
+        #         json.dump(self.camera_jsn, f)
+
         out = self(batch)
         self.save_image_grid(
             f"it{self.true_global_step}-test/{batch['index'][0]}.png",
