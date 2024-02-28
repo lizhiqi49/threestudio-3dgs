@@ -144,7 +144,7 @@ system:
   guidance_2d_type: "stable-diffusion-lora-guidance"
   guidance_2d:
     pretrained_model_name_or_path: "/home/lzq/workspace/huggingface_models/stabilityai--stable-diffusion-2-1-base"
-    pretrained_adapter_name_or_path: /home/lzq/workspace/CVGL-4DGen-Project/outputs/anya_lora
+    pretrained_adapter_name_or_path: "/home/lzq/workspace/CVGL-4DGen-Project/outputs/anya_lora"
     guidance_scale: 20.
     weighting_strategy: sds
     min_step_percent: 0.1
@@ -169,8 +169,8 @@ system:
 
   loss:
     lambda_sds_zero123: 0.1
-    lambda_sds_2d: 0.01
-    lambda_sds_2d_img: 0.0001
+    lambda_sds_2d: 0. # 0.01
+    lambda_sds_2d_img: 0. # 0.0001
     lambda_sds_vid: 0
     lambda_rgb: 10000.
     lambda_mask: 10000.
@@ -182,8 +182,8 @@ system:
     lambda_lite_arap_reg: [300, 0, 1000., 301]
     lambda_full_arap_reg: [300, 0, 1, 301]
     lambda_opacity_binary: 0. # [ 0, 0.1, 0.1, 1500 ]
-    lambda_density_regulation: [300, 0, 1, 301]
-    lambda_normal_regulation: [300, 0, 1, 301]
+    lambda_density_regulation: 0. # [300, 0, 1, 301]
+    lambda_normal_regulation: 0. # [300, 0, 1, 301]
     lambda_ref_gs: [100, 100, 1000, 101]
 
   optimizer:
