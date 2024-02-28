@@ -14,7 +14,14 @@ else:
 
 
 from .background import gaussian_mvdream_background
-from .geometry import exporter, gaussian_base, gaussian_io, spacetime_gaussian
+from .geometry import (
+    exporter, 
+    gaussian_base, 
+    gaussian_io, 
+    spacetime_gaussian, 
+    sugar,
+    dynamic_sugar,
+)
 from .material import gaussian_material
 from .renderer import (
     diff_gaussian_rasterizer,
@@ -23,6 +30,16 @@ from .renderer import (
     diff_gaussian_rasterizer_shading,
     diff_gaussian_rasterizer_st,
 )
-from .system import gaussian_mvdream, gaussian_splatting, gaussian_zero123, gaussian_4dgen
+from .system import (
+    gaussian_mvdream, 
+    gaussian_splatting, 
+    gaussian_zero123, 
+    gaussian_4dgen, 
+    sugar_zero123,
+    sugar_4dgen,
+)
 from .data import temporal_image
-from .guidance import temporal_stable_zero123_guidance
+from .guidance import (
+    temporal_stable_zero123_guidance, 
+    stable_diffusion_lora_guidance
+)

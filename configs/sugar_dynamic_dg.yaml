@@ -1,4 +1,4 @@
-name: "gs4d-spline"
+name: "sugar4d-test"
 tag: "${data.random_camera.height}_${rmspace:${basename:${data.video_frames_dir}},_}"
 exp_root_dir: "outputs"
 seed: 0
@@ -20,7 +20,7 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   random_camera: # threestudio/data/uncond.py -> RandomCameraDataModuleConfig
     height: 256
     width: 256
-    batch_size: 2
+    batch_size: 1
     eval_height: 512
     eval_width: 512
     eval_batch_size: 1
@@ -42,63 +42,33 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
     n_val_views: 30
     n_test_views: 120
 
-system_type: "gaussian-splatting-4dgen-system"
+system_type: "sugar-4dgen-system"
 system:
   stage: motion
   num_inter_frames: 10
-  length_inter_frames: 0.2
+  length_inter_frames: 0.1
 
-  geometry_type: "spacetime-gaussian-splatting"
+  geometry_type: "dynamic-sugar"
   geometry:
-    use_spline: true
     num_frames: 12
+    use_spline: true
+    use_deform_graph: true
 
-    enable_static: false
-    position_lr: 0.001
-    scaling_lr: 0.001
-    feature_lr: 0.01
-    opacity_lr: 0.05
-    rotation_lr: 0.001
-    densification_interval: 1000
-    prune_interval: 1000
-    opacity_reset_interval: 100000
-    densify_from_iter: ${trainer.max_steps}
-    densify_until_iter: ${trainer.max_steps}
-    prune_from_iter: ${trainer.max_steps}
-    prune_until_iter: ${trainer.max_steps}
-    densify_grad_threshold: 0.01
-    min_opac_prune: 0.005
-    split_thresh: 0.02
-    radii2d_thresh: 1000
+    n_dg_nodes: 1000
+    dg_node_connectivity: 16
+    dg_trans_lr: 0.001
+    dg_rot_lr: 0.001
 
-    enable_dynamic: true
+    dynamic_mode: deformation
     delta_xyz_lr: 0.001
-    delta_rot_lr: 0.0001
+    # delta_rot_lr: 0.0001
 
-    enable_spacetime: false
-    omega_lr: 0.0001
-    trbfc_lr: 0.0001
-    trbfs_lr: 0.03
-    move_lr: 3.5
-
-    rank_motion: 3
-    rank_omega: 1
-    
-    addsphpointsscale: 0.8
-    trbfslinit: 0.0
-    raystart: 0.7
-    spatial_lr_scale: 1
-
-    sphere: False
-
-    init_num_pts: 4096
-    pc_init_radius: 0.5
-    opacity_init: 0.05
-    max_num: 500000
-
-    enable_deformation: false
     deformation_lr: 0.00064
     grid_lr: 0.0064
+    spatial_extent: ${data.default_camera_distance}
+    spatial_lr_scale: 1
+
+    surface_mesh_to_bind_path: ""
 
   exporter_type: "gaussian-mesh-exporter"
 
@@ -158,8 +128,8 @@ system:
     ref_only_steps: 0
     guidance_eval: 0
     inter_frame_reg: 1
-    milestone_inter_frame_reg: 300
-    reset_neighbors: 10
+    milestone_inter_frame_reg: 100
+    reset_arap_weight_matrices: 100
 
   loggers:
     wandb:
@@ -169,22 +139,19 @@ system:
 
   loss:
     lambda_sds_zero123: 0.1
-    lambda_sds_2d: 0.01
+    lambda_sds_2d: 0
     lambda_sds_2d_img: 0.0001
     lambda_sds_vid: 0
-    lambda_rgb: 10000.
-    lambda_mask: 10000.
+    lambda_rgb: 1000.
+    lambda_mask: 1000.
     lambda_depth: 0. # 0.05
     lambda_depth_rel: 0. # [0, 0, 0.05, 100]
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
-    lambda_lite_arap_reg: [300, 0, 1000., 301]
-    lambda_full_arap_reg: [300, 0, 1, 301]
-    lambda_opacity_binary: 0. # [ 0, 0.1, 0.1, 1500 ]
-    lambda_density_regulation: [300, 0, 1, 301]
-    lambda_normal_regulation: [300, 0, 1, 301]
-    lambda_ref_gs: [100, 100, 1000, 101]
+    lambda_arap_reg: 0.01
+    lambda_ref_xyz: 0
+
 
   optimizer:
     name: Adam
@@ -195,16 +162,6 @@ system:
     params:
       background:
         lr: 0.001
-
-  sugar:
-    reset_neighbors_every: ${system.freq.reset_neighbors}
-    start_regularization_from: 0 # consistent with lambda_density_regulation
-    n_samples_for_sdf_regularization: 50000
-    start_sdf_better_normal_from: 500 # consistent with lambda_normal_regulation
-    use_sdf_better_normal_loss: true
-    prune_hard_opacity_threshold: 0.5
-    prune_low_opacity_gaussians_at: null # consistent with lambda opacity binary end
-    knn_to_track: 8
 
 trainer:
   max_steps: 5000

@@ -1,4 +1,3 @@
-import json
 import os
 import random
 from dataclasses import dataclass, field
@@ -14,110 +13,19 @@ import torch.nn.functional as F
 from threestudio.systems.base import BaseLift3DSystem
 from threestudio.systems.utils import parse_optimizer, parse_scheduler
 from threestudio.utils.loss import tv_loss
-from threestudio.utils.ops import get_cam_info_gaussian, convert_pose
+from threestudio.utils.ops import get_cam_info_gaussian
 from threestudio.utils.typing import *
 from threestudio.utils.misc import C
 from torch.cuda.amp import autocast
 from torchmetrics import PearsonCorrCoef
 
 from ..geometry.gaussian_base import BasicPointCloud, Camera
-from ..geometry.spacetime_gaussian import SpacetimeGaussianModel
+from ..geometry.dynamic_sugar import DynamicSuGaRModel
 from ..sugar.sugar_model import SuGaR
+from ..utils.arap_utils import ARAPCoach
 
-from mmcv.ops import knn
-from pytorch3d.ops import knn_points
-import pypose as pp
-
-def prepare_nn_indices(xyz: Float[Tensor, "N_pts 3"], k=2) -> Int[Tensor, "N_pts k"]:
-        """ Prepare the indices of k nearest neighbors for each point """
-        xyz_input = xyz.float().cuda()
-        xyz_input = xyz_input.unsqueeze(0).contiguous()
-        nn_indices = knn(k, xyz_input, xyz_input, False)[0]
-        nn_indices: Int[Tensor, "N_pts k"] = nn_indices.transpose(0, 1).long()
-        return nn_indices
-
-def compute_nn_distances(
-    xyz: Float[Tensor, "B N_pts 3"], indices: Int[Tensor, "B N_pts k"]
-) -> Float[Tensor, "B N_pts k"]:
-    if indices.ndim == 2:
-        indices = indices.unsqueeze(0)
-    if indices.shape[0] == 1:
-        indices = indices.expand(xyz.shape[0], *indices.shape[1:])
-    bs, N, k = indices.shape
-    xyz_nn = torch.zeros(bs, N, k, 3).to(xyz)
-    for i in range(bs):
-        xyz_nn[i] = xyz[i, indices[i].flatten(), :].reshape(N, k, 3)
-
-    dists = torch.norm(
-        xyz[:, :, None, :].repeat(1, 1, k, 1) - xyz_nn, dim=-1
-    )
-    return dists
-
-
-### Attempt to import svd batch method. If not provided, use default method
-### Sourced from https://github.com/KinglittleQ/torch-batch-svd/blob/master/torch_batch_svd/include/utils.h
-try:
-	from torch_batch_svd import svd as batch_svd
-except ImportError:
-	print("torch_batch_svd not installed. Using torch.svd instead")
-	batch_svd = torch.svd
-
-
-def compute_nn_weights(nn_dists: Float[Tensor, "*B N_pts k"]) -> Float[Tensor, "*B N_pts k"]:
-    return F.softmax(nn_dists ** 2, dim=-1)
-
-def compute_arap_energy(
-    xyz: Float[Tensor, "N_pts 3"],
-    xyz_prime: Float[Tensor, "N_pts 3"],
-    nn_indices: Int[Tensor, "N_pts k"],
-    nn_dists: Float[Tensor, "N_pts k"] = None,
-    nn_weights: Float[Tensor, "N_pts k"] = None,
-) -> Float:
-    n_pts, n_neighbors = nn_indices.shape
-
-    if nn_weights is None:
-        if nn_dists is None:
-            nn_dists = compute_nn_distances(xyz.unsqueeze(0), nn_indices.unsqueeze(0))[0]
-        nn_weights = compute_nn_weights(nn_dists)
-    w: Float[Tensor, "N_pts k"] = nn_weights   # softmax of negative squared distance
-
-    edge_mtx: Float[Tensor, "N_pts k 3"] = (
-        xyz.unsqueeze(1).repeat(1, n_neighbors, 1)
-        - xyz[nn_indices.flatten()].reshape(n_pts, n_neighbors, 3)
-    )
-    edge_mtx_prime = (
-        xyz_prime.unsqueeze(1).repeat(1, n_neighbors, 1)
-        - xyz[nn_indices.flatten()].reshape(n_pts, n_neighbors, 3)
-    )
-
-    # Calculate covariance matrix in bulk
-    D = torch.diag_embed(w, dim1=1, dim2=2)
-    S = torch.bmm(edge_mtx.permute(0, 2, 1), torch.bmm(D, edge_mtx_prime))
-
-    # Calculate rotations
-    U, sig, W = batch_svd(S)
-    R = torch.bmm(W, U.permute(0, 2, 1))
-
-    # Need to flip the column of U corresponding to smallest singular value
-	# for any det(Ri) <= 0
-    entries_to_flip = torch.nonzero(torch.det(R) <= 0, as_tuple=False).flatten()  # idxs where det(R) <= 0
-    if len(entries_to_flip) > 0:
-        Umod = U.clone()
-        cols_to_flip = torch.argmin(sig[entries_to_flip], dim=1)  # Get minimum singular value for each entry
-        Umod[entries_to_flip, :, cols_to_flip] *= -1  # flip cols
-        R[entries_to_flip] = torch.bmm(W[entries_to_flip], Umod[entries_to_flip].permute(0, 2, 1))
-
-    # Compute energy
-    rot_rigid = torch.bmm(R, edge_mtx.permute(0, 2, 1)).permute(0, 2, 1)
-    stretch_vec = edge_mtx_prime - rot_rigid
-    stretch_norm = torch.norm(stretch_vec, dim=2) ** 2
-    energy = (w * stretch_norm).sum()
-
-    return energy
-
-
-@threestudio.register("gaussian-splatting-4dgen-system")
-class Gaussian4DGen(BaseLift3DSystem):
+@threestudio.register("sugar-4dgen-system")
+class SuGaR4DGen(BaseLift3DSystem):
     @dataclass
     class Config(BaseLift3DSystem.Config):
         stage: str = "static"  # ["static", "motion", "refine"]
@@ -146,12 +54,6 @@ class Gaussian4DGen(BaseLift3DSystem):
         ambient_ratio_min: float = 0.5
         back_ground_color: Tuple[float, float, float] = (1, 1, 1)
 
-        # SuGaR
-        sugar: dict = field(default_factory=dict)
-
-        # KNN configs
-        knn_to_track: int = 10
-
         # Intermediate frames
         num_inter_frames: int = 10
         length_inter_frames: float = 0.2
@@ -163,10 +65,6 @@ class Gaussian4DGen(BaseLift3DSystem):
         super().configure()
         self.automatic_optimization = False
         self.stage = self.cfg.stage
-
-        self.geometry: SpacetimeGaussianModel
-        self.gs_original_xyz = self.geometry._xyz.clone()
-        self.gs_original_rot = self.geometry._rotation.clone()
 
     def configure_optimizers(self):
         optim = self.geometry.optimizer
@@ -180,18 +78,17 @@ class Gaussian4DGen(BaseLift3DSystem):
             self.merged_optimizer = False
         return [optim]
 
-    def on_load_checkpoint(self, checkpoint):
-        num_pts = checkpoint["state_dict"]["geometry._xyz"].shape[0]
-        pcd = BasicPointCloud(
-            points=np.zeros((num_pts, 3)),
-            colors=np.zeros((num_pts, 3)),
-            normals=np.zeros((num_pts, 3)),
-        )
-        # if hasattr(self.geometry.cfg, "spatial_lr_scale"):
-        self.geometry.create_from_pcd(pcd, self.geometry.cfg.get("spatial_lr_scale", 1))
-        self.geometry.training_setup()
-        # return
-        super().on_load_checkpoint(checkpoint)
+    # def on_load_checkpoint(self, checkpoint):
+    #     num_pts = checkpoint["state_dict"]["geometry._xyz"].shape[0]
+    #     pcd = BasicPointCloud(
+    #         points=np.zeros((num_pts, 3)),
+    #         colors=np.zeros((num_pts, 3)),
+    #         normals=np.zeros((num_pts, 3)),
+    #     )
+    #     self.geometry.create_from_pcd(pcd, self.geometry.cfg.spatial_lr_scale)
+    #     self.geometry.training_setup()
+    #     # return
+    #     super().on_load_checkpoint(checkpoint)
 
     def forward(self, batch: Dict[str, Any]) -> Dict[str, Any]:
         self.geometry.update_learning_rate(self.global_step)
@@ -244,8 +141,8 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         self.pearson = PearsonCorrCoef().to(self.device)
 
-        # KNN attributes
-        self.knn_to_track = self.cfg.knn_to_track
+        # ARAP
+        self.arap_coach = None
 
     def training_substep(self, batch, batch_idx, guidance: str):
         """
@@ -344,32 +241,12 @@ class Gaussian4DGen(BaseLift3DSystem):
                 (normal[:, 1:, :, :] - normal[:, :-1, :, :]).square().mean()
                 + (normal[:, :, 1:, :] - normal[:, :, :-1, :]).square().mean(),
             )
-
-        ## cross entropy loss for opacity to make it binary
-        if self.stage == "static" and self.C(self.cfg.loss.lambda_opacity_binary) > 0:
-            # only use in static stage
-            assert self.cfg.stage == 'static'
-            visibility_filter = out["visibility_filter"]
-            opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(visibility_filter), 1, 1)
-            vis_opacities = opacity[torch.stack(visibility_filter)]
-            set_loss(
-                "opacity_binary",
-                -(vis_opacities * torch.log(vis_opacities + 1e-10)
-                + (1 - vis_opacities) * torch.log(1 - vis_opacities + 1e-10)).mean()
-            )
-
-        if self.stage != "static" and guidance == "ref" and self.C(self.cfg.loss.lambda_ref_gs) > 0:
-            xyz_0, _, rot_0, _, _ = self.geometry.get_timed_all(torch.as_tensor(0, dtype=torch.float32, device=self.device))
-            # loss_ref_gs = F.mse_loss(
-            #     pp.SE3(torch.cat([xyz_0, rot_0], dim=-1)).tensor(),
-            #     pp.SE3(torch.cat([self.gs_original_xyz, self.gs_original_rot], dim=-1)).tensor()
-            # )
-            loss_ref_gs = torch.abs(
-                pp.SE3(torch.cat([xyz_0, rot_0], dim=-1)).tensor()
-                - pp.SE3(torch.cat([self.gs_original_xyz, self.gs_original_rot], dim=-1)).tensor()
-            ).mean()
-            set_loss("ref_gs", loss_ref_gs)
-
+        
+        if self.stage != "static" and guidance == "ref" and self.C(self.cfg.loss.lambda_ref_xyz) > 0:
+            xyz_f0 = self.geometry.get_timed_xyz_vertices(torch.as_tensor(0, dtype=torch.float32, device=self.device))
+            loss_ref_xyz = torch.abs(xyz_f0 - self.geometry.get_xyz_verts).mean()
+            set_loss("ref_xyz", loss_ref_xyz)
+ 
         loss = 0.0
         for name, value in loss_terms.items():
             self.log(f"train/{name}", value)
@@ -387,7 +264,7 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         out.update({"loss": loss})
         return out
-
+    
     def training_substep_inter_frames(self, batch, batch_idx):
         loss_terms = {}
         loss_prefix = "loss_interf_"
@@ -399,12 +276,12 @@ class Gaussian4DGen(BaseLift3DSystem):
         rand_range_start = np.random.rand() * (1 - self.cfg.length_inter_frames)
         rand_timestamps = torch.as_tensor(
             np.linspace(
-                rand_range_start,
-                rand_range_start + self.cfg.length_inter_frames,
-                self.cfg.num_inter_frames,
+                rand_range_start, 
+                rand_range_start + self.cfg.length_inter_frames, 
+                self.cfg.num_inter_frames, 
                 endpoint=True
-            ),
-            dtype=torch.float32,
+            ), 
+            dtype=torch.float32, 
             device=self.device
         )
 
@@ -430,12 +307,12 @@ class Gaussian4DGen(BaseLift3DSystem):
                 # guidance_eval=guidance_eval,
             )
             set_loss("sds_2d", guidance_out["loss_sds"])
-
+            
         # ARAP regularization
-        if self.C(self.cfg.loss.lambda_lite_arap_reg) > 0 or self.C(self.cfg.loss.lambda_full_arap_reg):
+        if self.C(self.cfg.loss.lambda_arap_reg) > 0 and self.arap_coach is not None:
             xyz_timed = []
             for t in rand_timestamps:
-                xyz_t = self.geometry.get_timed_xyz(t)
+                xyz_t = self.geometry.get_timed_xyz_vertices(t)
                 xyz_timed.append(xyz_t)
             xyz_timed = torch.stack(xyz_timed, dim=0)
 
@@ -445,47 +322,31 @@ class Gaussian4DGen(BaseLift3DSystem):
                 (rand_timestamps[..., None] - ref_timestamps[None, ...]).abs(),
                 dim=-1
             )
-            nn_idx = self.knn_idx[ref_timestamp_idx]
-            if self.C(self.cfg.loss.lambda_lite_arap_reg) > 0:
-                nn_dists_timed = compute_nn_distances(xyz_timed, nn_idx)
-                nn_dists_ref = self.knn_dists[ref_timestamp_idx]
-                loss_arap_reg = (
-                    torch.abs(nn_dists_timed[:-1] - nn_dists_timed[1:]).mean()
-                    # + torch.abs(nn_dists_timed - nn_dists_ref).mean()
+            ref_points = self.compute_xyz_for_key_frames(ref_timestamps)
+            loss_arap = 0.
+
+            # ARAP loss between sampled and key frames
+            for i, idx in enumerate(ref_timestamp_idx):
+                loss_arap += self.arap_coach.compute_arap_energy(
+                    ref_points[idx], xyz_timed[i], edge_weights=self.arap_weight_matrices[idx]
                 )
-                set_loss("lite_arap_reg", loss_arap_reg)
-            if self.C(self.cfg.loss.lambda_full_arap_reg) > 0:
-                loss_full_arap = 0.
-                # Between sampled frames and key frames
-                for i in ref_timestamp_idx:
-                    loss_full_arap += compute_arap_energy(
-                        self.ref_points[i], xyz_timed[i], self.knn_idx[i],
-                        nn_weights=self.knn_arap_weights[i]
-                    )
+            
+            # ARAP loss between neighboring frames
+            for i, idx in enumerate(ref_timestamp_idx[:-1]):
+                loss_arap += self.arap_coach.compute_arap_energy(
+                    xyz_timed[i], xyz_timed[i+1], edge_weights=self.arap_weight_matrices[idx]
+                )
 
-                # Among key frames
-                for i in range(self.ref_points.shape[0] - 1):
-                    loss_full_arap += compute_arap_energy(
-                        self.ref_points[i], self.ref_points[i+1], self.knn_idx[i],
-                        nn_weights=self.knn_arap_weights[i]
-                    )
+            # # Among key frames
+            # for i in range(self.ref_points.shape[0] - 1):
+            #     loss_full_arap += compute_arap_energy(
+            #         self.ref_points[i], self.ref_points[i+1], self.knn_idx[i],
+            #         nn_weights=self.knn_arap_weights[i]
+            #     )
+            
+            # loss_full_arap = loss_full_arap * 1 / len(ref_timestamp_idx)
+            set_loss("arap_reg", loss_arap)
 
-                # loss_full_arap = loss_full_arap * 1 / len(ref_timestamp_idx)
-                set_loss("full_arap_reg", loss_full_arap)
-
-        ## density regulation loss
-        if hasattr(self, 'sugar') and self.C(self.cfg.loss.lambda_density_regulation, "interval") > 0:
-            coarse_args = EasyDict(
-                {"current_step": self.true_global_step,
-                # "outputs": out,
-                "n_samples_for_sdf_regularization": self.cfg.sugar.n_samples_for_sdf_regularization,
-                "use_sdf_better_normal_loss": self.cfg.sugar.use_sdf_better_normal_loss,
-                "start_sdf_better_normal_from": self.cfg.sugar.start_sdf_better_normal_from,
-                "timestamp": rand_timestamps
-                })
-            dloss = self.sugar.coarse_density_regulation(coarse_args)
-            set_loss("density_regulation", dloss['density_regulation'])
-            set_loss("normal_regulation", dloss['normal_regulation'])
 
         loss = 0.0
         for name, value in loss_terms.items():
@@ -503,57 +364,59 @@ class Gaussian4DGen(BaseLift3DSystem):
         self.log(f"train/loss_interf", loss)
 
         return loss
-
+    
+    def compute_xyz_for_key_frames(self, timestamps_kf):
+        points = []
+        for t in timestamps_kf:
+            p = self.geometry.get_timed_xyz_vertices(t)
+            points.append(p)
+        points = torch.stack(points, dim=0)
+        return points
+    
     @torch.no_grad()
-    def reset_neighbors(self, timestamps=None):
-        if timestamps is not None:
-            assert isinstance(self.geometry, SpacetimeGaussianModel)
+    def reset_arap_weight_matrices(self, timestamps_kf):
+        # Precompute vert's positions for each key frame
+        if timestamps_kf is not None:
+            assert isinstance(self.geometry, DynamicSuGaRModel)
             points = []
-            for t in timestamps:
-                p = self.geometry.get_timed_xyz(t)
+            for t in timestamps_kf:
+                p = self.geometry.get_timed_xyz_vertices(t)
                 points.append(p)
             points = torch.stack(points, dim=0)
-        else:
-            points = self.geometry._xyz.unsqueeze(0)
+            
+        # TODO: OOM occured, use all ones for now
+        # Precompute the cot weight matrices for each frame
+        # weight_matrices = torch.stack(
+        #     [
+        #         self.arap_coach.produce_cot_weights_nfmt(points[i]) for i, t in enumerate(timestamps_kf)
+        #     ]
+        # )
+        weight_matrices = torch.ones(
+            (len(timestamps_kf), self.geometry.n_verts, self.arap_coach.max_n_neighbors),
+            dtype=torch.float32,
+            device=self.device
+        )
+        self.arap_weight_matrices = weight_matrices
 
-        knns = knn_points(points, points, K=self.knn_to_track)
-        self.knn_idx: Int[Tensor, "T N_pts k"] = knns.idx
-        self.knn_dists: Float[Tensor, "T N_pts k"] = knns.dists
-        self.knn_arap_weights: Float[Tensor, "T N_pts k"] = compute_nn_weights(self.knn_dists)
-        self.ref_points = points
 
-        if self.sugar is not None:
-            if timestamps is not None:
-                time_knn_idx = {
-                    "{:.{}f}".format(t, 1): self.knn_idx[i] for i, t in enumerate(timestamps)
-                }
-                time_knn_dists = {
-                    "{:.{}f}".format(t, 1): self.knn_dists[i] for i, t in enumerate(timestamps)
-                }
-                self.sugar.ref_timestamps = timestamps
-            else:
-                time_knn_idx = None
-                time_knn_dists = None
-            self.sugar.knn_idx = self.knn_idx[0]
-            self.sugar.knn_dists = self.knn_dists[0]
-            self.sugar.time_knn_idx = time_knn_idx
-            self.sugar.time_knn_dists = time_knn_dists
+    def on_train_batch_start(self, batch, batch_idx, unused=0):
+        if self.geometry.cfg.use_spline:
+            self.geometry.compute_control_knots()
+            self.geometry.spliner.update_end_time()
+        
+        if self.global_step >= self.cfg.freq.milestone_inter_frame_reg and self.arap_coach is None and self.C(self.cfg.loss.lambda_arap_reg) > 0:
+            self.arap_coach = ARAPCoach(
+                self.geometry.get_xyz_verts, 
+                self.geometry.get_faces.cpu().numpy(), 
+                self.device
+            )
+            self.reset_arap_weight_matrices(timestamps_kf=batch.get('timestamp'))
 
     def training_step(self, batch, batch_idx):
         opt = self.optimizers()
 
-        if self.cfg.sugar.start_regularization_from is not None:
-            if self.global_step == self.cfg.sugar.start_regularization_from:
-                self.sugar = SuGaR(self.geometry, keep_track_of_knn=True, knn_to_track=self.cfg.knn_to_track)
-                # self.sugar.reset_neighbors(timestamp=batch.get('timestamp'))
-                self.reset_neighbors(timestamps=batch.get('timestamp'))
-            elif self.global_step > self.cfg.sugar.start_regularization_from:
-                assert hasattr(self.geometry, "pruned_or_densified")
-                # reset neighbors after gaussians densified or settings
-                if self.geometry.pruned_or_densified or self.global_step % self.cfg.freq.reset_neighbors == 0:
-                    self.geometry.pruned_or_densified = False
-                    # self.sugar.reset_neighbors(timestamp=batch.get('timestamp'))
-                    self.reset_neighbors(timestamps=batch.get('timestamp'))
+        if self.global_step % self.cfg.freq.reset_arap_weight_matrices == 0 and self.arap_coach is not None:
+            self.reset_arap_weight_matrices(timestamps_kf=batch.get('timestamp'))
 
         total_loss = 0.0
 
@@ -577,27 +440,14 @@ class Gaussian4DGen(BaseLift3DSystem):
 
         self.log("train/loss", total_loss, prog_bar=True)
 
-        out = out_zero123
-        visibility_filter = out["visibility_filter"]
-        radii = out["radii"]
-        guidance_inp = out["comp_rgb"]
-        viewspace_point_tensor = out["viewspace_points"]
-
         total_loss.backward()
-        iteration = self.global_step
-        self.geometry.update_states(
-            iteration,
-            visibility_filter,
-            radii,
-            viewspace_point_tensor,
-        )
         opt.step()
         opt.zero_grad(set_to_none=True)
 
         return {"loss": total_loss}
 
     def on_validation_epoch_start(self) -> None:
-        if self.stage == 'motion' and self.geometry.cfg.use_spline:
+        if self.geometry.cfg.use_spline:
             self.geometry.compute_control_knots()
             self.geometry.spliner.update_end_time()
 
@@ -705,12 +555,6 @@ class Gaussian4DGen(BaseLift3DSystem):
             name="validation_epoch_end",
             step=self.true_global_step,
         )
-
-        # debug: save ply at each validation step
-        plysavepath = os.path.join(self.get_save_dir(), f"point_cloud_it{self.true_global_step}.ply")
-        self.geometry.save_ply(plysavepath)
-        # debug
-
         if self.stage != "static":
             filestem = f"it{self.true_global_step}-val-ref"
             self.save_img_sequence(
@@ -724,7 +568,7 @@ class Gaussian4DGen(BaseLift3DSystem):
             )
 
     def on_test_epoch_start(self) -> None:
-        if self.stage != "static" and self.geometry.cfg.use_spline:
+        if self.geometry.cfg.use_spline:
             self.geometry.compute_control_knots()
             self.geometry.spliner.update_end_time()
 
@@ -738,20 +582,6 @@ class Gaussian4DGen(BaseLift3DSystem):
                     "frame_idx": torch.as_tensor(batch_idx, device=self.device)
                 }
             )
-
-        # debug
-        # T_c2w = convert_pose(batch['c2w'][0].cpu()).numpy()
-        # idx = batch['index'].item()
-        # pos = T_c2w[:3, 3]
-        # rot = T_c2w[:3, :3]
-        # serializable_array_2d = [x.tolist() for x in rot]
-        # if idx == 0:
-        #     self.camera_jsn = []
-        # self.camera_jsn.append({"index": idx, "rotation": serializable_array_2d, "position": pos.tolist()})
-        # if idx == 119:
-        #     with open("output.json", 'w') as f:
-        #         json.dump(self.camera_jsn, f)
-
         out = self(batch)
         self.save_image_grid(
             f"it{self.true_global_step}-test/{batch['index'][0]}.png",
@@ -848,5 +678,5 @@ class Gaussian4DGen(BaseLift3DSystem):
                 name="test-ref",
                 step=self.true_global_step,
             )
-        plysavepath = os.path.join(self.get_save_dir(), f"point_cloud_it{self.true_global_step}.ply")
-        self.geometry.save_ply(plysavepath)
+        # plysavepath = os.path.join(self.get_save_dir(), f"point_cloud_it{self.true_global_step}.ply")
+        # self.geometry.save_ply(plysavepath)

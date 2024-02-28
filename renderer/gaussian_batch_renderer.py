@@ -27,6 +27,11 @@ class GaussianBatchRenderer:
                 timestamp = batch["timestamp"][batch_idx]
             else:
                 timestamp = None
+            
+            if batch.__contains__("frame_indices"):
+                frame_idx = batch["frame_indices"][batch_idx]
+            else:
+                frame_idx = None
 
             # import pdb; pdb.set_trace()
             viewpoint_cam = Camera(
@@ -37,7 +42,8 @@ class GaussianBatchRenderer:
                 world_view_transform=w2c,
                 full_proj_transform=proj,
                 camera_center=cam_p,
-                timestamp=timestamp
+                timestamp=timestamp,
+                frame_idx=frame_idx
             )
 
             with autocast(enabled=False):

@@ -67,7 +67,6 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
 
         bg_color = bg_color if not invert_bg_color else (1.0 - bg_color)
 
-        pc: SpacetimeGaussianModel
         pc = self.geometry
         # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
         screenspace_points = (
@@ -133,7 +132,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         # colors_precomp = pc.get_features(tforpoly).reshape(pc.get_xyz.shape[0], 3)
         # means3D = means3D + motion
         
-        means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_all(viewpoint_camera.timestamp)
+        means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_all(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
         
         shs = None
         cov3D_precomp = None
