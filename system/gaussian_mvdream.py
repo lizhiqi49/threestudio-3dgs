@@ -68,7 +68,7 @@ class MVDreamSystem(BaseLift3DSystem):
         guidance_inp = out["comp_rgb"]
         viewspace_point_tensor = out["viewspace_points"]
         guidance_out = self.guidance(
-            guidance_inp, self.prompt_utils, **batch, rgb_as_latents=False
+            guidance_inp, self.prompt_utils, **batch, **out, rgb_as_latents=False
         )
 
         loss_sds = 0.0

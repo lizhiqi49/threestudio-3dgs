@@ -31,8 +31,9 @@ from .uncond import (
 
 @dataclass 
 class TemporalRandomImageDataModuleConfig(SingleImageDataModuleConfig):
-    num_frames: int = 14
     video_frames_dir: Optional[str] = None 
+    video_length: int = 14
+    num_frames: int = 14
     norm_timestamp: bool = False
     white_background: bool = True
 
@@ -42,6 +43,7 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         self.cfg = parse_structured(
             TemporalRandomImageDataModuleConfig, cfg
         )
+        self.video_length = self.cfg.video_length
         self.num_frames = self.cfg.num_frames
 
         if self.cfg.use_random_camera:
@@ -136,9 +138,9 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         self.load_video_frames()
         self.prev_height = self.height
 
-        self.frame_indices = torch.arange(self.num_frames, dtype=torch.long)
+        self.frame_indices = torch.arange(self.video_length, dtype=torch.long)
         self.timestamps = torch.as_tensor(
-            np.linspace(0, 1, self.num_frames, endpoint=True), dtype=torch.float32
+            np.linspace(0, 1, self.video_length, endpoint=True), dtype=torch.float32
         )
 
     # Copied from threestudio.data.image.SingleImageDataBase.load_images
@@ -219,7 +221,10 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         if self.cfg.requires_normal:
             self.normals = []
 
-        for idx in range(self.cfg.num_frames):
+        # all_frame_paths = glob.glob(os.path.join(self.cfg.video_frames_dir, "*_rgba.png"))
+        # self.video_length = len(all_frame_paths)
+
+        for idx in range(self.video_length):
             frame_path = os.path.join(self.cfg.video_frames_dir, f"{idx:03}_rgba.png")
             self.load_single_frame(frame_path)
 
@@ -240,7 +245,9 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         return self.rgbs
 
     def collate(self, batch) -> Dict[str, Any]:
-
+        rand_frame_idx = np.random.choice(self.video_length, (self.num_frames,), replace=False)
+        timestamps = self.timestamps[rand_frame_idx]
+        frame_indices = self.frame_indices[rand_frame_idx]
         batch = {
             # "rays_o": self.rays_o,
             # "rays_d": self.rays_d,
@@ -250,21 +257,21 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
             "elevation": self.elevation_deg,
             "azimuth": self.azimuth_deg,
             "camera_distances": self.camera_distance,
-            "rgb": self.rgbs,
-            "ref_depth": self.depths,
-            "ref_normal": self.normals,
-            "mask": self.masks,
+            "rgb": self.rgbs[rand_frame_idx],
+            "ref_depth": self.depths[rand_frame_idx] if self.depths is not None else None,
+            "ref_normal": self.normals[rand_frame_idx] if self.normals is not None else None,
+            "mask": self.masks[rand_frame_idx],
             "height": self.height,
             "width": self.width,
             "c2w": self.c2w4x4.repeat(self.num_frames, 1, 1),
             "fovy": self.fovy.repeat(self.num_frames),
-            "timestamp": self.timestamps,
-            "frame_indices": self.frame_indices
+            "timestamp": timestamps,
+            "frame_indices": frame_indices
         }
         if self.cfg.use_random_camera:
             batch_rand_cam = self.random_pose_generator.collate(None)
-            batch_rand_cam["timestamp"] = self.timestamps.repeat_interleave(self.rand_cam_bs)
-            batch_rand_cam["frame_indices"] = self.frame_indices.repeat_interleave(self.rand_cam_bs)
+            batch_rand_cam["timestamp"] = timestamps.repeat_interleave(self.rand_cam_bs)
+            batch_rand_cam["frame_indices"] = frame_indices.repeat_interleave(self.rand_cam_bs)
             batch["random_camera"] = batch_rand_cam
 
         return batch

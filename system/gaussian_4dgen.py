@@ -346,7 +346,6 @@ class Gaussian4DGen(BaseLift3DSystem):
         ## cross entropy loss for opacity to make it binary
         if self.stage == "static" and self.C(self.cfg.loss.lambda_opacity_binary) > 0:
             # only use in static stage
-            assert self.cfg.stage == 'static'
             visibility_filter = out["visibility_filter"]
             opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(visibility_filter), 1, 1)
             vis_opacities = opacity[torch.stack(visibility_filter)]

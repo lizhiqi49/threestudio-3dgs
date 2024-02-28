@@ -13,15 +13,14 @@ from threestudio.utils.ops import get_cam_info_gaussian
 from threestudio.utils.typing import *
 from torch.cuda.amp import autocast
 from torchmetrics import PearsonCorrCoef
-from pytorch3d.loss import mesh_normal_consistency, mesh_laplacian_smoothing
 import open3d as o3d
 
 from ..geometry.gaussian_base import BasicPointCloud, Camera
 from ..geometry.sugar import SuGaRModel
 
 
-@threestudio.register("sugar-zero123-system")
-class SuGaRZero123(BaseLift3DSystem):
+@threestudio.register("sugar-imagedream-system")
+class SuGaRImageDream(BaseLift3DSystem):
     @dataclass
     class Config(BaseLift3DSystem.Config):
         freq: dict = field(default_factory=dict)
@@ -71,18 +70,10 @@ class SuGaRZero123(BaseLift3DSystem):
         super().on_fit_start()
         # no prompt processor
         self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
-
-        # visualize all training images
-        # all_images = self.trainer.datamodule.train_dataloader().dataset.get_all_images()
-        # self.save_image_grid(
-        #     "all_training_images.png",
-        #     [
-        #         {"type": "rgb", "img": image, "kwargs": {"data_format": "HWC"}}
-        #         for image in all_images
-        #     ],
-        #     name="on_fit_start",
-        #     step=self.true_global_step,
-        # )
+        self.prompt_processor = threestudio.find(self.cfg.prompt_processor_type)(
+            self.cfg.prompt_processor
+        )
+        self.prompt_utils = self.prompt_processor()
 
         self.pearson = PearsonCorrCoef().to(self.device)
 
@@ -95,8 +86,7 @@ class SuGaRZero123(BaseLift3DSystem):
             ambient_ratio = 1.0
             shading = "diffuse"
             batch["shading"] = shading
-        elif guidance == "zero123":
-            batch = batch["random_camera"]
+        elif guidance == "imagedream":
             ambient_ratio = (
                 self.cfg.ambient_ratio_min
                 + (1 - self.cfg.ambient_ratio_min) * random.random()
@@ -161,10 +151,11 @@ class SuGaRZero123(BaseLift3DSystem):
                     "normal",
                     1 - F.cosine_similarity(valid_pred_normal, valid_gt_normal).mean(),
                 )
-        elif guidance == "zero123":
+        elif guidance == "imagedream":
             # zero123
             guidance_out = self.guidance(
                 out["comp_rgb"],
+                self.prompt_utils,
                 **batch,
                 rgb_as_latents=False,
                 guidance_eval=guidance_eval,
@@ -182,18 +173,6 @@ class SuGaRZero123(BaseLift3DSystem):
                 "normal_smooth",
                 (normal[:, 1:, :, :] - normal[:, :-1, :, :]).square().mean()
                 + (normal[:, :, 1:, :] - normal[:, :, :-1, :]).square().mean(),
-            )
-            
-        surface_mesh = self.geometry.surface_mesh
-        if self.C(self.cfg.loss.lambda_normal_consistency) > 0:
-            set_loss(
-                "normal_consistency",
-                mesh_normal_consistency(surface_mesh)
-            )
-        if self.C(self.cfg.loss.lambda_laplacian_smoothing) > 0:
-            set_loss(
-                "laplacian_smoothing",
-                mesh_laplacian_smoothing(surface_mesh, "uniform")
             )
 
         loss = 0.0
@@ -217,24 +196,24 @@ class SuGaRZero123(BaseLift3DSystem):
     def training_step(self, batch, batch_idx):
         opt = self.optimizers()
 
-        if self.cfg.freq.get("ref_or_zero123", "accumulate") == "accumulate":
-            do_ref = True
-            do_zero123 = True
-        elif self.cfg.freq.get("ref_or_zero123", "accumulate") == "alternate":
-            do_ref = (
-                self.true_global_step < self.cfg.freq.ref_only_steps
-                or self.true_global_step % self.cfg.freq.n_ref == 0
-            )
-            do_zero123 = not do_ref
+        # if self.cfg.freq.get("ref_or_zero123", "accumulate") == "accumulate":
+        #     do_ref = True
+        #     do_zero123 = True
+        # elif self.cfg.freq.get("ref_or_zero123", "accumulate") == "alternate":
+        #     do_ref = (
+        #         self.true_global_step < self.cfg.freq.ref_only_steps
+        #         or self.true_global_step % self.cfg.freq.n_ref == 0
+        #     )
+        #     do_zero123 = not do_ref
 
         total_loss = 0.0
-        if do_zero123:
-            out = self.training_substep(batch, batch_idx, guidance="zero123")
-            total_loss += out["loss"]
 
-        if do_ref:
-            out = self.training_substep(batch, batch_idx, guidance="ref")
-            total_loss += out["loss"]
+        out = self.training_substep(batch, batch_idx, guidance="imagedream")
+        total_loss += out["loss"]
+
+        # if do_ref:
+        #     out = self.training_substep(batch, batch_idx, guidance="ref")
+        #     total_loss += out["loss"]
 
         self.log("train/loss", total_loss, prog_bar=True)
 

@@ -16,6 +16,7 @@ class GaussianBatchRenderer:
         pred_normals = []
         depths = []
         masks = []
+        bgs = []
         for batch_idx in range(bs):
             batch["batch_idx"] = batch_idx
             fovy = batch["fovy"][batch_idx]
@@ -65,6 +66,8 @@ class GaussianBatchRenderer:
                     depths.append(render_pkg["depth"])
                 if render_pkg.__contains__("mask"):
                     masks.append(render_pkg["mask"])
+                if render_pkg.__contains__("comp_rgb_bg"):
+                    bgs.append(render_pkg["comp_rgb_bg"])
 
         outputs = {
             "comp_rgb": torch.stack(renders, dim=0).permute(0, 2, 3, 1),
@@ -96,6 +99,12 @@ class GaussianBatchRenderer:
             outputs.update(
                 {
                     "comp_mask": torch.stack(masks, dim=0).permute(0, 2, 3, 1),
+                }
+            )
+        if len(bgs) > 0:
+            outputs.update(
+                {
+                    "comp_rgb_bg": torch.cat(bgs, dim=0).permute(0, 2, 3, 1),
                 }
             )
         return outputs

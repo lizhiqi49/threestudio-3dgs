@@ -37,6 +37,7 @@ from .system import (
     gaussian_4dgen, 
     sugar_zero123,
     sugar_4dgen,
+    sugar_imagedream,
 )
 from .data import temporal_image
 from .guidance import (
