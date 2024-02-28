@@ -223,4 +223,5 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             "viewspace_points": screenspace_points,
             "visibility_filter": radii > 0,
             "radii": radii,
+            "comp_rgb_bg": comp_rgb_bg,
         }

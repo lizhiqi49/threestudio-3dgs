@@ -53,7 +53,7 @@ class DynamicSuGaRModel(SuGaRModel):
         d_xyz: bool = True
         d_rotation: bool = True
         d_opacity: bool = False
-        d_scale: bool = False
+        d_gs_scale: bool = False
 
 
     cfg: Config
@@ -96,9 +96,9 @@ class DynamicSuGaRModel(SuGaRModel):
 
         elif self.dynamic_mode == "deformation":
             deformation_args = ModelHiddenParams(None)
-            deformation_args.no_ds = not self.cfg.d_scale
             deformation_args.no_dr = not self.cfg.d_rotation
-            deformation_args.no_do = not self.cfg.d_opacity
+            deformation_args.no_ds = not self.cfg.d_gs_scale
+            deformation_args.no_do = True
             self._deformation = DeformationNetwork(deformation_args)
             self._deformation_table = torch.empty(0)
         else:
@@ -195,25 +195,39 @@ class DynamicSuGaRModel(SuGaRModel):
             raise ValueError("No vertices when with no mesh binded.")
         return points
     
-    def get_timed_xyz_vertices(self, timestamp=None, frame_idx=None, no_spline=False):
-        xyz_v = self._points
-        timestamp = timestamp.expand(xyz_v.shape[0], 1)
+    def get_timed_xyz_vertices(
+        self, 
+        timestamp: Float[Tensor, "N_t"] = None, 
+        frame_idx: Int[Tensor, "N_t"] = None, 
+        no_spline: bool = False
+    ) -> Float[Tensor, "N_t N_v 3"]:
+        if timestamp is not None:
+            if timestamp.ndim == 0:
+                timestamp = timestamp.unsqueeze(-1)
+        if frame_idx is not None:
+            if frame_idx.ndim == 0:
+                frame_idx = frame_idx.unsqueeze(-1)
+            
+        xyz_v = self._points.unsqueeze(0)
         if not no_spline and self.cfg.use_spline:
             if self.cfg.use_deform_graph:
-                xyz_v_timed = self.deform(timestamp[0])[0]
+                xyz_v_timed = self.deform(timestamp)
             else:
-                xyz_v_timed = self.spline_interp_xyz(timestamp[0])[0]
+                xyz_v_timed = self.spline_interp_xyz(timestamp)
         else:
             if self.dynamic_mode == "discrete":
                 motion = self._delta_xyz[frame_idx]
                 xyz_v_timed = xyz_v + motion
             elif self.dynamic_mode == "deformation":
-                xyz_v_timed = self._deformation.forward_dynamic_xyz(xyz_v, timestamp*2-1)
+                pts_inp = torch.cat([xyz_v] * timestamp.shape[-1], dim=0).reshape(-1, 3)
+                time_inp = timestamp.unsqueeze(-1).repeat_interleave(self._points.shape[0], dim=0) * 2 - 1
+                xyz_v_timed = self._deformation.forward_dynamic_xyz(pts_inp, time_inp)
+                xyz_v_timed = xyz_v_timed.reshape(timestamp.shape[-1], self._points.shape[0], 3)
         return xyz_v_timed
     
     def get_timed_xyz_gs(self, timestamp=None, frame_idx=None):
         if self.binded_to_surface_mesh:
-            xyz_vert_timed = self.get_timed_xyz_vertices(timestamp, frame_idx)
+            xyz_vert_timed = self.get_timed_xyz_vertices(timestamp, frame_idx)[0]
             xyz_gs_timed = self.get_gs_xyz_from_vertices(xyz_vert_timed)
         else:
             raise NotImplementedError
@@ -251,6 +265,20 @@ class DynamicSuGaRModel(SuGaRModel):
             idt_quaternion[..., -1] = 1
             rot = rot + idt_quaternion
         return trans, rot
+    
+    def get_timed_surface_mesh(self, 
+        timestamp: Float[Tensor, "N_t"] = None, 
+        frame_idx: Int[Tensor, "N_t"] = None
+    ) -> Meshes:
+        n_t = len(timestamp) if timestamp is not None else len(frame_idx)
+        surface_mesh = Meshes(
+            verts=self.get_timed_xyz_vertices(timestamp, frame_idx),
+            faces=torch.stack([self._surface_mesh_faces] * n_t, dim=0),
+            textures=TexturesVertex(
+                verts_features=torch.stack([self._vertex_colors] * n_t, dim=0).clamp(0, 1).to(self.device)
+            )
+        )
+        return surface_mesh
     
     def init_cubic_spliner(self):
         n_ctrl_knots = self.num_frames
@@ -359,7 +387,7 @@ class DynamicSuGaRModel(SuGaRModel):
             / self._xyz_neighbor_nodes_weights.sum(dim=1, keepdim=True)
         )
     
-    def deform(self, timestamp: Float[Tensor, "N_t"]):
+    def deform(self, timestamp: Float[Tensor, "N_t"]) -> Float[Tensor, "N_t N_p 3"]:
         n_t = len(timestamp)
         neighbor_nodes_xyz: Float[Tensor, "N_p N_n 3"]
         neighbor_nodes_xyz = self._deform_graph_node_xyz[self._xyz_neighbor_node_idx]

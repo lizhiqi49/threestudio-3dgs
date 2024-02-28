@@ -337,3 +337,7 @@ class Zero123(BaseLift3DSystem):
             name="test",
             step=self.true_global_step,
         )
+        gs_save_path = os.path.join(
+            self.get_save_dir(), f"exported_gs_step{self.global_step}.ply"
+        )
+        self.geometry.save_ply(gs_save_path)

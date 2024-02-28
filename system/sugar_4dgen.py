@@ -19,6 +19,8 @@ from threestudio.utils.misc import C
 from torch.cuda.amp import autocast
 from torchmetrics import PearsonCorrCoef
 
+from pytorch3d.loss import mesh_normal_consistency
+
 from ..geometry.gaussian_base import BasicPointCloud, Camera
 from ..geometry.dynamic_sugar import DynamicSuGaRModel
 from ..sugar.sugar_model import SuGaR
@@ -219,6 +221,16 @@ class SuGaR4DGen(BaseLift3DSystem):
                     "normal",
                     1 - F.cosine_similarity(valid_pred_normal, valid_gt_normal).mean(),
                 )
+
+            if self.C(self.cfg.loss.lambda_normal_consistency) > 0:
+                surface_meshes = self.geometry.get_timed_surface_mesh(
+                    timestamp=batch["timestamp"], frame_idx=batch["frame_indices"]
+                )
+                set_loss(
+                    "normal_consistency",
+                    mesh_normal_consistency(surface_meshes)
+                )
+                
         elif guidance == "zero123":
             # zero123
             guidance_out = self.guidance_zero123(
@@ -310,11 +322,12 @@ class SuGaR4DGen(BaseLift3DSystem):
             
         # ARAP regularization
         if self.C(self.cfg.loss.lambda_arap_reg) > 0 and self.arap_coach is not None:
-            xyz_timed = []
-            for t in rand_timestamps:
-                xyz_t = self.geometry.get_timed_xyz_vertices(t)
-                xyz_timed.append(xyz_t)
-            xyz_timed = torch.stack(xyz_timed, dim=0)
+            # xyz_timed = []
+            # for t in rand_timestamps:
+            #     xyz_t = self.geometry.get_timed_xyz_vertices(t)
+            #     xyz_timed.append(xyz_t)
+            # xyz_timed = torch.stack(xyz_timed, dim=0)
+            xyz_timed = self.geometry.get_timed_xyz_vertices(rand_timestamps)
 
             # Get the indices of nearest reference timestamps
             ref_timestamps = batch.get("timestamp")
@@ -366,11 +379,12 @@ class SuGaR4DGen(BaseLift3DSystem):
         return loss
     
     def compute_xyz_for_key_frames(self, timestamps_kf):
-        points = []
-        for t in timestamps_kf:
-            p = self.geometry.get_timed_xyz_vertices(t)
-            points.append(p)
-        points = torch.stack(points, dim=0)
+        # points = []
+        # for t in timestamps_kf:
+        #     p = self.geometry.get_timed_xyz_vertices(t)
+        #     points.append(p)
+        # points = torch.stack(points, dim=0)
+        points = self.geometry.get_timed_xyz_vertices(timestamps_kf)
         return points
     
     @torch.no_grad()

@@ -54,7 +54,7 @@ class SuGaRModel(BaseGeometry):
         primitive_types: str = "diamond"    # 'diamond', 'square'
         surface_mesh_to_bind_path: str = ""     # path of Open3D mesh
         learn_surface_mesh_positions: bool = True
-        learn_surface_mesh_opacity: bool = True
+        learn_surface_mesh_opacity: bool = False
         learn_surface_mesh_scales: bool = True
         freeze_gaussians: bool = False
         spatial_lr_scale: float = 10.
@@ -147,8 +147,13 @@ class SuGaRModel(BaseGeometry):
         #         np.array(o3d_mesh.triangles), device=self.device
         #     ).requires_grad_(False)
         # )
+        verts = np.array(o3d_mesh.vertices)
+        faces = np.array(o3d_mesh.triangles)
+        vert_colors = np.array(o3d_mesh.vertex_colors)
+        if len(vert_colors) == 0:
+            vert_colors = np.ones_like(verts) * 0.5
         verts, faces, vert_colors = self.prune_isolated_points(
-            np.array(o3d_mesh.vertices), np.array(o3d_mesh.triangles), np.array(o3d_mesh.vertex_colors)
+            verts, faces, vert_colors
         )
         self.register_buffer(
             "_surface_mesh_faces", torch.as_tensor(faces, device=self.device)
@@ -343,6 +348,14 @@ class SuGaRModel(BaseGeometry):
                 param_group["lr"] = C(
                     self.cfg.position_lr, 0, iteration, interpolation="exp"
                 ) * self.spatial_lr_scale
+            if param_group["name"] == "f_dc":
+                param_group["lr"] = C(
+                    self.cfg.feature_lr, 0, iteration, interpolation="exp"
+                )
+            if param_group["name"] == "f_rest":
+                param_group["lr"] = C(
+                    self.cfg.feature_lr, 0, iteration, interpolation="exp"
+                ) / 20.0
 
         self.color_clip = C(self.cfg.color_clip, 0, iteration)
     
@@ -507,8 +520,16 @@ class SuGaRModel(BaseGeometry):
             faces=[self._surface_mesh_faces.to(self.device)],
             textures=TexturesVertex(verts_features=self._vertex_colors[None].clamp(0, 1).to(self.device)),
             # verts_normals=[verts_normals.to(rc.device)],
-            )
+        )
         return surface_mesh
+    
+    @property
+    def get_face_normals(self) -> Float[Tensor, "N_faces 3"]:
+        return F.normalize(self.surface_mesh.faces_normals_list()[0], dim=-1)
+    
+    @property
+    def get_gs_normals(self) -> Float[Tensor, "N_gs 3"]:
+        return self.get_face_normals.repeat_interleave(self.cfg.n_gaussians_per_surface_triangle)
     
     def update_texture_features(self, square_size_in_texture=2):
         features = self.sh_coordinates.view(len(self.points), -1)
