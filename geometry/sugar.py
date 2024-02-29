@@ -368,7 +368,7 @@ class SuGaRModel(BaseGeometry):
                     "lr": param["lr"],
                 }
             )
-        self.optimizer = torch.optim.Adam(l, lr=0.0)
+        self.optimizer = torch.optim.AdamW(l, lr=0.0, betas=[0.9, 0.99], eps=1.e-15)
         return self.optimizer
                 
     @property
@@ -468,6 +468,14 @@ class SuGaRModel(BaseGeometry):
         return torch.nn.functional.normalize(quaternions, dim=-1)
     
     @property
+    def get_face_normals(self) -> Float[Tensor, "N_faces 3"]:
+        return F.normalize(self.surface_mesh.faces_normals_list()[0], dim=-1)
+    
+    @property
+    def get_gs_normals(self) -> Float[Tensor, "N_gs 3"]:
+        return self.get_face_normals.repeat_interleave(self.cfg.n_gaussians_per_surface_triangle, dim=0)
+    
+    @property
     def get_scaling(self):
         return self.scaling
     
@@ -522,14 +530,6 @@ class SuGaRModel(BaseGeometry):
             # verts_normals=[verts_normals.to(rc.device)],
         )
         return surface_mesh
-    
-    @property
-    def get_face_normals(self) -> Float[Tensor, "N_faces 3"]:
-        return F.normalize(self.surface_mesh.faces_normals_list()[0], dim=-1)
-    
-    @property
-    def get_gs_normals(self) -> Float[Tensor, "N_gs 3"]:
-        return self.get_face_normals.repeat_interleave(self.cfg.n_gaussians_per_surface_triangle)
     
     def update_texture_features(self, square_size_in_texture=2):
         features = self.sh_coordinates.view(len(self.points), -1)

@@ -151,9 +151,15 @@ system:
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_normal_consistency: 10.
+    lambda_laplacian_smoothing: 0.
     lambda_3d_normal_smooth: 0.
     lambda_arap_reg: 0.01
     lambda_ref_xyz: 0
+
+    # tv losses
+    lambda_rgb_tv: 1.
+    lambda_depth_tv: 1.
+    lambda_normal_tv: 1.
 
 
   optimizer:

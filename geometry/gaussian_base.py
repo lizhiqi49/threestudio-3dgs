@@ -266,6 +266,8 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
         self.optimizer = None
         self.setup_functions()
 
+        self.min_opac_prune = self.cfg.min_opac_prune
+
         if self.cfg.geometry_convert_from.startswith("shap-e:"):
             shap_e_guidance = threestudio.find("shap-e-guidance")(
                 self.cfg.shap_e_guidance_config
@@ -820,7 +822,8 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
         visibility_filter,
         radii,
         viewspace_point_tensor,
-    ):
+    ):  
+        self.pruned_or_densified = False
         if self.cfg.sugar_prune_at is not None and iteration == self.cfg.sugar_prune_at:
             self.pruned_or_densified = True
             prune_mask = (self.get_opacity < self.cfg.sugar_prune_threshold).squeeze()
@@ -850,7 +853,7 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             and iteration % self.cfg.prune_interval == 0
         ):
             self.pruned_or_densified = True
-            self.prune(self.cfg.min_opac_prune, self.cfg.radii2d_thresh)
+            self.prune(self.min_opac_prune, self.cfg.radii2d_thresh)
             if iteration % self.cfg.opacity_reset_interval == 0:
                 self.reset_opacity()
 

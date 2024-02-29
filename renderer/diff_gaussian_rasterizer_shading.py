@@ -82,6 +82,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         bg_color: torch.Tensor,
         scaling_modifier=1.0,
         override_color=None,
+        override_bg_color=None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -153,8 +154,6 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         rays_o = kwargs["rays_o"][batch_idx]
         # rays_d_flatten: Float[Tensor, "Nr 3"] = rays_d.unsqueeze(0)
 
-        comp_rgb_bg = self.background(dirs=rays_d.unsqueeze(0))
-
         rendered_image, radii, rendered_depth, rendered_alpha = rasterizer(
             means3D=means3D,
             means2D=means2D,
@@ -166,6 +165,11 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             cov3D_precomp=cov3D_precomp,
         )
         _, H, W = rendered_image.shape
+
+        if override_bg_color is not None:
+            comp_rgb_bg = override_bg_color.expand(1, H, W, -1)
+        else:
+            comp_rgb_bg = self.background(dirs=rays_d.unsqueeze(0))
 
         xyz_map = rays_o + rendered_depth.permute(1, 2, 0) * rays_d
         normal_map = self.normal_module(xyz_map.permute(2, 0, 1).unsqueeze(0))[0]

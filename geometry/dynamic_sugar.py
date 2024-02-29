@@ -216,8 +216,11 @@ class DynamicSuGaRModel(SuGaRModel):
                 xyz_v_timed = self.spline_interp_xyz(timestamp)
         else:
             if self.dynamic_mode == "discrete":
-                motion = self._delta_xyz[frame_idx]
-                xyz_v_timed = xyz_v + motion
+                if self.cfg.use_deform_graph:
+                    xyz_v_timed = self.deform(timestamp, frame_idx)
+                else:
+                    motion = self._delta_xyz[frame_idx]
+                    xyz_v_timed = xyz_v + motion
             elif self.dynamic_mode == "deformation":
                 pts_inp = torch.cat([xyz_v] * timestamp.shape[-1], dim=0).reshape(-1, 3)
                 time_inp = timestamp.unsqueeze(-1).repeat_interleave(self._points.shape[0], dim=0) * 2 - 1
@@ -387,14 +390,22 @@ class DynamicSuGaRModel(SuGaRModel):
             / self._xyz_neighbor_nodes_weights.sum(dim=1, keepdim=True)
         )
     
-    def deform(self, timestamp: Float[Tensor, "N_t"]) -> Float[Tensor, "N_t N_p 3"]:
-        n_t = len(timestamp)
+    def deform(
+        self, 
+        timestamp: Float[Tensor, "N_t"] = None,
+        frame_idx: Int[Tensor, "N_t"] = None
+    ) -> Float[Tensor, "N_t N_p 3"]:
+        n_t = len(timestamp) if timestamp is not None else len(frame_idx)
         neighbor_nodes_xyz: Float[Tensor, "N_p N_n 3"]
         neighbor_nodes_xyz = self._deform_graph_node_xyz[self._xyz_neighbor_node_idx]
         # neighbor_nodes_rots = self._deform_graph_node_rots[self._xyz_neighbor_node_idx]
         # neighbor_nodes_trans = self._deform_graph_node_trans[self._xyz_neighbor_node_idx]
-        
-        dg_node_trans, dg_node_rots = self.spline_interp_dg(timestamp)
+        if self.cfg.use_spline:
+            dg_node_trans, dg_node_rots = self.spline_interp_dg(timestamp)
+        else:
+            dg_node_trans = self._dg_node_trans[frame_idx]
+            dg_node_rots = pp.SO3(self._dg_node_rots[frame_idx])
+
         neighbor_nodes_trans: Float[Tensor, "N_t N_p N_n 3"]
         neighbor_nodes_rots: Float[Tensor, "N_t N_p N_n 3 3"]
         neighbor_nodes_trans = dg_node_trans[:, self._xyz_neighbor_node_idx]
