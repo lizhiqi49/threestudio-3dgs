@@ -142,7 +142,7 @@ system:
   loss:
     lambda_sds_zero123: 0.1
     lambda_sds_2d: 0
-    lambda_sds_2d_img: 0.0001
+    lambda_sds_2d_img: 0 # 0.0001
     lambda_sds_vid: 0
     lambda_rgb: 1000.
     lambda_mask: 1000.
@@ -154,7 +154,6 @@ system:
     lambda_3d_normal_smooth: 0.
     lambda_arap_reg: 0.01
     lambda_ref_xyz: 0
-
 
   optimizer:
     name: Adam

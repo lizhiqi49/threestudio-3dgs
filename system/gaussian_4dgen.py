@@ -28,13 +28,15 @@ from mmcv.ops import knn
 from pytorch3d.ops import knn_points
 import pypose as pp
 
+
 def prepare_nn_indices(xyz: Float[Tensor, "N_pts 3"], k=2) -> Int[Tensor, "N_pts k"]:
-        """ Prepare the indices of k nearest neighbors for each point """
-        xyz_input = xyz.float().cuda()
-        xyz_input = xyz_input.unsqueeze(0).contiguous()
-        nn_indices = knn(k, xyz_input, xyz_input, False)[0]
-        nn_indices: Int[Tensor, "N_pts k"] = nn_indices.transpose(0, 1).long()
-        return nn_indices
+    """ Prepare the indices of k nearest neighbors for each point """
+    xyz_input = xyz.float().cuda()
+    xyz_input = xyz_input.unsqueeze(0).contiguous()
+    nn_indices = knn(k, xyz_input, xyz_input, False)[0]
+    nn_indices: Int[Tensor, "N_pts k"] = nn_indices.transpose(0, 1).long()
+    return nn_indices
+
 
 def compute_nn_distances(
     xyz: Float[Tensor, "B N_pts 3"], indices: Int[Tensor, "B N_pts k"]
@@ -57,14 +59,15 @@ def compute_nn_distances(
 ### Attempt to import svd batch method. If not provided, use default method
 ### Sourced from https://github.com/KinglittleQ/torch-batch-svd/blob/master/torch_batch_svd/include/utils.h
 try:
-	from torch_batch_svd import svd as batch_svd
+    from torch_batch_svd import svd as batch_svd
 except ImportError:
-	print("torch_batch_svd not installed. Using torch.svd instead")
-	batch_svd = torch.svd
+    print("torch_batch_svd not installed. Using torch.svd instead")
+    batch_svd = torch.svd
 
 
 def compute_nn_weights(nn_dists: Float[Tensor, "*B N_pts k"]) -> Float[Tensor, "*B N_pts k"]:
     return F.softmax(nn_dists ** 2, dim=-1)
+
 
 def compute_arap_energy(
     xyz: Float[Tensor, "N_pts 3"],
@@ -79,7 +82,7 @@ def compute_arap_energy(
         if nn_dists is None:
             nn_dists = compute_nn_distances(xyz.unsqueeze(0), nn_indices.unsqueeze(0))[0]
         nn_weights = compute_nn_weights(nn_dists)
-    w: Float[Tensor, "N_pts k"] = nn_weights   # softmax of negative squared distance
+    w: Float[Tensor, "N_pts k"] = nn_weights  # softmax of negative squared distance
 
     edge_mtx: Float[Tensor, "N_pts k 3"] = (
         xyz.unsqueeze(1).repeat(1, n_neighbors, 1)
@@ -99,7 +102,7 @@ def compute_arap_energy(
     R = torch.bmm(W, U.permute(0, 2, 1))
 
     # Need to flip the column of U corresponding to smallest singular value
-	# for any det(Ri) <= 0
+    # for any det(Ri) <= 0
     entries_to_flip = torch.nonzero(torch.det(R) <= 0, as_tuple=False).flatten()  # idxs where det(R) <= 0
     if len(entries_to_flip) > 0:
         Umod = U.clone()
@@ -346,7 +349,7 @@ class Gaussian4DGen(BaseLift3DSystem):
             )
 
         ## cross entropy loss for opacity to make it binary
-        if self.stage == "static" and self.C(self.cfg.loss.lambda_opacity_binary) > 0:
+        if self.stage == "static" and self.C(self.cfg.loss.lambda_opacity_binary, interpolation='interval') > 0:
             # only use in static stage
             visibility_filter = out["visibility_filter"]
             opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(visibility_filter), 1, 1)
@@ -354,11 +357,12 @@ class Gaussian4DGen(BaseLift3DSystem):
             set_loss(
                 "opacity_binary",
                 -(vis_opacities * torch.log(vis_opacities + 1e-10)
-                + (1 - vis_opacities) * torch.log(1 - vis_opacities + 1e-10)).mean()
+                  + (1 - vis_opacities) * torch.log(1 - vis_opacities + 1e-10)).mean()
             )
 
         if self.stage != "static" and guidance == "ref" and self.C(self.cfg.loss.lambda_ref_gs) > 0:
-            xyz_0, _, rot_0, _, _ = self.geometry.get_timed_all(torch.as_tensor(0, dtype=torch.float32, device=self.device))
+            xyz_0, _, rot_0, _, _ = self.geometry.get_timed_all(
+                torch.as_tensor(0, dtype=torch.float32, device=self.device))
             # loss_ref_gs = F.mse_loss(
             #     pp.SE3(torch.cat([xyz_0, rot_0], dim=-1)).tensor(),
             #     pp.SE3(torch.cat([self.gs_original_xyz, self.gs_original_rot], dim=-1)).tensor()
@@ -465,7 +469,7 @@ class Gaussian4DGen(BaseLift3DSystem):
                 # Among key frames
                 for i in range(self.ref_points.shape[0] - 1):
                     loss_full_arap += compute_arap_energy(
-                        self.ref_points[i], self.ref_points[i+1], self.knn_idx[i],
+                        self.ref_points[i], self.ref_points[i + 1], self.knn_idx[i],
                         nn_weights=self.knn_arap_weights[i]
                     )
 
@@ -476,12 +480,12 @@ class Gaussian4DGen(BaseLift3DSystem):
         if hasattr(self, 'sugar') and self.C(self.cfg.loss.lambda_density_regulation, "interval") > 0:
             coarse_args = EasyDict(
                 {"current_step": self.true_global_step,
-                # "outputs": out,
-                "n_samples_for_sdf_regularization": self.cfg.sugar.n_samples_for_sdf_regularization,
-                "use_sdf_better_normal_loss": self.cfg.sugar.use_sdf_better_normal_loss,
-                "start_sdf_better_normal_from": self.cfg.sugar.start_sdf_better_normal_from,
-                "timestamp": rand_timestamps
-                })
+                 # "outputs": out,
+                 "n_samples_for_sdf_regularization": self.cfg.sugar.n_samples_for_sdf_regularization,
+                 "use_sdf_better_normal_loss": self.cfg.sugar.use_sdf_better_normal_loss,
+                 "start_sdf_better_normal_from": self.cfg.sugar.start_sdf_better_normal_from,
+                 "timestamp": rand_timestamps
+                 })
             dloss = self.sugar.coarse_density_regulation(coarse_args)
             set_loss("density_regulation", dloss['density_regulation'])
             set_loss("normal_regulation", dloss['normal_regulation'])
@@ -571,7 +575,7 @@ class Gaussian4DGen(BaseLift3DSystem):
         out_ref = self.training_substep(batch, batch_idx, guidance="ref")
         total_loss += out_ref["loss"]
 
-        if self.global_step > self.cfg.freq.milestone_inter_frame_reg and self.global_step % self.cfg.freq.inter_frame_reg == 0:
+        if self.stage == 'motion' and self.global_step > self.cfg.freq.milestone_inter_frame_reg and self.global_step % self.cfg.freq.inter_frame_reg == 0:
             total_loss += self.training_substep_inter_frames(batch, batch_idx)
 
         self.log("train/loss", total_loss, prog_bar=True)

@@ -5,7 +5,7 @@ seed: 0
 
 data_type: "single-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
-  image_path: ./load/videos/anya/anya.png
+  image_path: ./load/images/csm_luigi_rgba.png
   height: [ 128, 256, 512 ]
   width: [ 128, 256, 512 ]
   resolution_milestones: [ 200, 300 ]
@@ -107,6 +107,7 @@ system:
   freq:
     ref_only_steps: 0
     guidance_eval: 0
+    reset_neighbors: 100
 
   loggers:
     wandb:
@@ -115,7 +116,10 @@ system:
       name: None
 
   loss:
-    lambda_sds: 0.1
+    lambda_sds_zero123: 0.1
+    lambda_sds_2d: 0. # 0.01
+    lambda_sds_2d_img: 0. # 0.0001
+    lambda_sds_vid: 0.
     lambda_rgb: [ 100, 500., 1000., 400 ]
     lambda_mask: 50.
     lambda_depth: 0. # 0.05
@@ -124,8 +128,8 @@ system:
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
     lambda_opacity_binary: [2000, 10., 10., 3000]
-    lambda_density_regulation: [3000, 1., 1., 8000]
-    lambda_normal_regulation: [3000, 10., 10., 8000]
+    lambda_density_regulation: [300, 1., 1., 8000]
+    lambda_normal_regulation: [300, 10., 10., 8000]
 
   optimizer:
     name: Adam
@@ -139,12 +143,12 @@ system:
 
   sugar:
     reset_neighbors_every: 100
-    start_regularization_from: 3000 # consistent with lambda_density_regulation
+    start_regularization_from: 300 # consistent with lambda_density_regulation
     n_samples_for_sdf_regularization: 500000
-    start_sdf_better_normal_from: 3000 # consistent with lambda_normal_regulation
+    start_sdf_better_normal_from: 300 # consistent with lambda_normal_regulation
     use_sdf_better_normal_loss: true
     prune_hard_opacity_threshold: 0.5
-    prune_low_opacity_gaussians_at: 3000 # consistent with lambda opacity binary end
+    prune_low_opacity_gaussians_at: 300 # consistent with lambda opacity binary end
     knn_to_track: 16
 
 #    sdf_sampling_scale_factor: 1.5
