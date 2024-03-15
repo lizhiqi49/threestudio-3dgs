@@ -23,7 +23,6 @@ from pytorch3d.loss import mesh_normal_consistency, mesh_laplacian_smoothing
 
 from ..geometry.gaussian_base import BasicPointCloud, Camera
 from ..geometry.dynamic_sugar import DynamicSuGaRModel
-from ..sugar.sugar_model import SuGaR
 from ..utils.arap_utils import ARAPCoach
 
 @threestudio.register("sugar-4dgen-system")
