@@ -74,7 +74,8 @@ system:
 
   exporter_type: "gaussian-mesh-exporter"
 
-  renderer_type: "diff-gaussian-rasterizer-spacetime"
+  # renderer_type: "diff-gaussian-rasterizer-spacetime"
+  renderer_type: "diff-sugar-rasterizer-temporal"
   renderer:
     debug: false
     invert_bg_prob: 1.0

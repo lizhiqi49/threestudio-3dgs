@@ -29,6 +29,9 @@ from .renderer import (
     diff_gaussian_rasterizer_background,
     diff_gaussian_rasterizer_shading,
     diff_gaussian_rasterizer_st,
+    diff_gaussian_rasterizer_normal,
+    diff_sugar_rasterizer_normal,
+    diff_sugar_rasterizer_temporal,
 )
 from .system import (
     gaussian_mvdream, 
@@ -39,8 +42,9 @@ from .system import (
     sugar_4dgen,
     sugar_imagedream,
     gaussian_to_sugar,
+    sugar_static,
 )
-from .data import temporal_image
+from .data import temporal_image, image
 from .guidance import (
     temporal_stable_zero123_guidance, 
     stable_diffusion_lora_guidance

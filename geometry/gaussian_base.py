@@ -217,6 +217,7 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
 
         geometry_convert_from: str = ""
         load_ply_only_vertex: bool = False
+        load_vertex_only_position: bool = False
         init_num_pts: int = 100
         pc_init_radius: float = 0.8
         opacity_init: float = 0.1
@@ -265,8 +266,6 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             self._normal = torch.empty(0)
         self.optimizer = None
         self.setup_functions()
-
-        self.min_opac_prune = self.cfg.min_opac_prune
 
         if self.cfg.geometry_convert_from.startswith("shap-e:"):
             shap_e_guidance = threestudio.find("shap-e-guidance")(
@@ -323,7 +322,11 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
                     positions = np.vstack(
                         [vertices["x"], vertices["y"], vertices["z"]]
                     ).T
-                    if vertices.__contains__("red"):
+                    # ===== only for experiment, should be removed later ===== #
+                    trans = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+                    positions = positions @ trans
+                    # ===== only for experiment, should be removed later ===== #
+                    if vertices.__contains__("red") and not self.cfg.load_vertex_only_position:
                         colors = (
                             np.vstack(
                                 [vertices["red"], vertices["green"], vertices["blue"]]
@@ -853,7 +856,7 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
             and iteration % self.cfg.prune_interval == 0
         ):
             self.pruned_or_densified = True
-            self.prune(self.min_opac_prune, self.cfg.radii2d_thresh)
+            self.prune(self.cfg.min_opac_prune, self.cfg.radii2d_thresh)
             if iteration % self.cfg.opacity_reset_interval == 0:
                 self.reset_opacity()
 

@@ -16,14 +16,13 @@ from torchmetrics import PearsonCorrCoef
 from pytorch3d.loss import mesh_normal_consistency, mesh_laplacian_smoothing
 import open3d as o3d
 
-from ..geometry.gaussian_base import BasicPointCloud, Camera
-from ..geometry.sugar import SuGaRModel
+from .base import BaseSuGaRSystem
 
 
 @threestudio.register("sugar-zero123-system")
-class SuGaRZero123(BaseLift3DSystem):
+class SuGaRZero123(BaseSuGaRSystem):
     @dataclass
-    class Config(BaseLift3DSystem.Config):
+    class Config(BaseSuGaRSystem.Config):
         freq: dict = field(default_factory=dict)
         refinement: bool = False
         ambient_ratio_min: float = 0.5
@@ -48,22 +47,27 @@ class SuGaRZero123(BaseLift3DSystem):
             self.merged_optimizer = False
         return [optim]
 
-    def on_load_checkpoint(self, checkpoint):
-        num_pts = checkpoint["state_dict"]["geometry._xyz"].shape[0]
-        pcd = BasicPointCloud(
-            points=np.zeros((num_pts, 3)),
-            colors=np.zeros((num_pts, 3)),
-            normals=np.zeros((num_pts, 3)),
-        )
-        self.geometry.create_from_pcd(pcd, 10)
-        self.geometry.training_setup()
-        return
+    # def on_load_checkpoint(self, checkpoint):
+    #     num_pts = checkpoint["state_dict"]["geometry._xyz"].shape[0]
+    #     pcd = BasicPointCloud(
+    #         points=np.zeros((num_pts, 3)),
+    #         colors=np.zeros((num_pts, 3)),
+    #         normals=np.zeros((num_pts, 3)),
+    #     )
+    #     self.geometry.create_from_pcd(pcd, 10)
+    #     self.geometry.training_setup()
+    #     return
 
-    def forward(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+    def forward(
+        self, 
+        batch: Dict[str, Any], 
+        compute_color_in_rasterizer: bool = False
+    ) -> Dict[str, Any]:
         self.geometry.update_learning_rate(self.global_step)
-        batch.update(
-            {"override_color": self.geometry.get_points_rgb()}
-        )
+        if not compute_color_in_rasterizer:
+            batch.update(
+                {"override_color": self.geometry.get_points_rgb()}
+            )
         outputs = self.renderer.batch_forward(batch)
         return outputs
 
@@ -360,26 +364,4 @@ class SuGaRZero123(BaseLift3DSystem):
         self.export_mesh_to_ply()
 
 
-    @torch.no_grad()
-    def export_mesh_to_ply(self):
-        self.geometry: SuGaRModel
-        mesh = o3d.geometry.TriangleMesh()
-        mesh.vertices = o3d.utility.Vector3dVector(
-            self.geometry.get_xyz_verts.detach().cpu().numpy()
-        )
-        mesh.triangles = o3d.utility.Vector3iVector(
-            self.geometry.get_faces.detach().cpu().numpy()
-        )
-        mesh.vertex_colors = o3d.utility.Vector3dVector(
-            self.geometry._vertex_colors.detach().cpu().numpy()
-        )
-        mesh.compute_vertex_normals()
-
-        mesh_save_path = os.path.join(
-            self.get_save_dir(), f"exported_mesh_step{self.global_step}.ply"
-        )
-        o3d.io.write_triangle_mesh(
-            mesh_save_path, mesh, write_triangle_uvs=True, write_vertex_colors=True, write_vertex_normals=True
-        )
-        threestudio.info(f"The current mesh is exported to {mesh_save_path}.")
         

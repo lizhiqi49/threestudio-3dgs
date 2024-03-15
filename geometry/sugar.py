@@ -21,13 +21,12 @@ from threestudio.utils.typing import *
 
 import open3d as o3d
 from pytorch3d.ops import knn_points
-from pytorch3d.transforms import quaternion_apply, quaternion_invert, matrix_to_quaternion
+from pytorch3d.transforms import quaternion_apply, quaternion_invert, matrix_to_quaternion, quaternion_to_matrix
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer import TexturesUV, TexturesVertex
 
 from .gaussian_base import SH2RGB, RGB2SH
-from ..utils.arap_utils import ARAPCoach
-
+from ..utils.sugar_utils import get_one_ring_neighbors
 
 def inverse_sigmoid(x):
     return torch.log(x/(1-x))
@@ -54,18 +53,26 @@ class SuGaRModel(BaseGeometry):
         primitive_types: str = "diamond"    # 'diamond', 'square'
         surface_mesh_to_bind_path: str = ""     # path of Open3D mesh
         learn_surface_mesh_positions: bool = True
-        learn_surface_mesh_opacity: bool = False
+        learn_surface_mesh_opacity: bool = True
         learn_surface_mesh_scales: bool = True
         freeze_gaussians: bool = False
         spatial_lr_scale: float = 10.
         spatial_extent: float = 3.5
         color_clip: Any = 2.0
+        
+        gs_color_inherit_vertices: bool = True
+        init_gs_opacity: float = 0.5
 
         geometry_convert_from: str = ""
+        
+        # For texture mesh extraction
+        square_size_in_texture: int = 10
+
+        pred_normal: bool = False
 
     cfg: Config
 
-    def configure(self) -> None:
+    def configure(self, o3d_mesh=None) -> None:
         super().configure()
         self.active_sh_degree = 0
         self.sh_levels = self.cfg.sh_levels
@@ -75,10 +82,12 @@ class SuGaRModel(BaseGeometry):
 
         if self.cfg.surface_mesh_to_bind_path is not None:
             self.binded_to_surface_mesh = True
-            self.load_surface_mesh_to_bind()
+            self.load_surface_mesh_to_bind(o3d_mesh)
         else:
             self.binded_to_surface_mesh = False
             self._points = torch.empty(0)
+
+        self.n_gaussians_per_surface_triangle = self.cfg.n_gaussians_per_surface_triangle
 
         self.knn_dists = None
         self.knn_idx = None
@@ -88,15 +97,15 @@ class SuGaRModel(BaseGeometry):
         # Texture attributes
         self._texture_initialized = False
         self.verts_uv, self.faces_uv = None, None
-
-        if self.binded_to_surface_mesh and (not self.cfg.learn_surface_mesh_opacity):
+        
+        
+        if self.binded_to_surface_mesh and not self.learn_opacities:
             all_densities = inverse_sigmoid(
                 0.9999 * torch.ones((self.n_points, 1), dtype=torch.float, device=self.device)
             )
-            self.learn_opacities = False
         else:
             all_densities = inverse_sigmoid(
-                0.1 * torch.ones((self.n_points, 1), dtype=torch.float, device=self.device)
+                self.cfg.init_gs_opacity * torch.ones((self.n_points, 1), dtype=torch.float, device=self.device)
             )
         self.all_densities = nn.Parameter(all_densities, requires_grad=self.learn_opacities)
         self.return_one_densities = False
@@ -105,16 +114,14 @@ class SuGaRModel(BaseGeometry):
         if self.cfg.beta_mode == "learnable":
             self._log_beta = torch.empty(0)
 
-        # ? Render parameters
         
         self.initialize_learnable_radiuses()
-        self.update_texture_features()
+        # self.update_texture_features()
         self.training_setup()
 
-        # TODO: geometry_convert_from
 
     def prune_isolated_points(self, verts, faces, vert_colors):
-        orn = ARAPCoach.get_one_ring_neighbors(faces)
+        orn = get_one_ring_neighbors(faces)
         vert_idx_kept = list(orn.keys())
         new_vert_idx = np.arange(len(vert_idx_kept), dtype=int)
         mapping_old2new = dict(zip(vert_idx_kept, new_vert_idx))
@@ -131,7 +138,7 @@ class SuGaRModel(BaseGeometry):
         ...
     
 
-    def load_surface_mesh_to_bind(self):
+    def load_surface_mesh_to_bind(self, mesh=None):
         self.binded_to_surface_mesh = True
         self.learn_positions = self.cfg.learn_surface_mesh_positions
         self.learn_scales = self.cfg.learn_surface_mesh_scales
@@ -140,7 +147,10 @@ class SuGaRModel(BaseGeometry):
 
         # Load mesh with open3d
         threestudio.info(f"Loading mesh to bind from: {self.cfg.surface_mesh_to_bind_path}...")
-        o3d_mesh = o3d.io.read_triangle_mesh(self.cfg.surface_mesh_to_bind_path)
+        if mesh is None:
+            o3d_mesh = o3d.io.read_triangle_mesh(self.cfg.surface_mesh_to_bind_path)
+        else:
+            o3d_mesh = mesh
 
         # self._surface_mesh_faces = nn.Parameter(
         #     torch.as_tensor(
@@ -176,13 +186,19 @@ class SuGaRModel(BaseGeometry):
         self._vertex_colors = torch.as_tensor(
             vert_colors, dtype=torch.float32, device=self.device
         )
-        faces_colors = self._vertex_colors[self._surface_mesh_faces]  # n_faces, 3, n_coords
-        colors = faces_colors[:, None] * self.surface_triangle_bary_coords[None]  # n_faces, n_gaussians_per_face, 3, n_colors
-        colors = colors.sum(dim=-2)  # n_faces, n_gaussians_per_face, n_colors
-        colors = colors.reshape(-1, 3)  # n_faces * n_gaussians_per_face, n_colors
+        
+        if self.cfg.gs_color_inherit_vertices:
+            faces_colors = self._vertex_colors[self._surface_mesh_faces]  # n_faces, 3, n_coords
+            colors = faces_colors[:, None] * self.surface_triangle_bary_coords[None]  # n_faces, n_gaussians_per_face, 3, n_colors
+            colors = colors.sum(dim=-2)  # n_faces, n_gaussians_per_face, n_colors
+            colors = colors.reshape(-1, 3)  # n_faces * n_gaussians_per_face, n_colors
 
-        # Initialize color features
-        sh_coordinates_dc = RGB2SH(colors).unsqueeze(dim=1)
+            # Initialize color features
+            sh_coordinates_dc = RGB2SH(colors).unsqueeze(dim=1)
+        else:
+            sh_coordinates_dc = RGB2SH(
+                0.5 * torch.ones(self._n_points, 1, 3)
+            )
         self._sh_coordinates_dc = nn.Parameter(
             sh_coordinates_dc.to(self.device, dtype=torch.float32), 
             requires_grad=(not self.cfg.freeze_gaussians)
@@ -338,6 +354,8 @@ class SuGaRModel(BaseGeometry):
         self.optimize_list = l
         self.optimize_params = [d["name"] for d in l]
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
+        
+        self.color_clip = C(self.cfg.color_clip, 0, 0)
 
     def update_learning_rate(self, iteration):
         """Following SuGaR source code, only update position lr here"""
@@ -411,12 +429,15 @@ class SuGaRModel(BaseGeometry):
 
     @property
     def sh_coordinates(self):
-        return torch.cat([self._sh_coordinates_dc, self._sh_coordinates_rest], dim=1)
+        features_dc = self._sh_coordinates_dc
+        features_dc = features_dc.clip(-self.color_clip, self.color_clip)
+        features_rest = self._sh_coordinates_rest
+        return torch.cat([features_dc, features_rest], dim=1)
 
     @property
-    def texture_features(self):
+    def _texture_features(self):    # starts with "_" to avoid update texture features in update step
         if not self._texture_initialized:
-            self.update_texture_features()
+            self.update_texture_features(self.cfg.square_size_in_texture)
         return self.sh_coordinates[self.point_idx_per_pixel]
     
     @property
@@ -476,6 +497,10 @@ class SuGaRModel(BaseGeometry):
         return self.get_face_normals.repeat_interleave(self.cfg.n_gaussians_per_surface_triangle, dim=0)
     
     @property
+    def get_features(self):
+        return self.sh_coordinates
+
+    @property
     def get_scaling(self):
         return self.scaling
     
@@ -506,9 +531,9 @@ class SuGaRModel(BaseGeometry):
             raise ValueError
     
     @property
-    def mesh(self):
+    def _mesh(self):    # starts with "_" to avoid update texture features in update step
         textures_uv = TexturesUV(
-            maps=SH2RGB(self.texture_features[..., 0, :][None]),
+            maps=SH2RGB(self._texture_features[..., 0, :][None]),
             verts_uvs=self.verts_uv[None],
             faces_uvs=self.faces_uv[None],
             sampling_mode='nearest',
@@ -530,6 +555,28 @@ class SuGaRModel(BaseGeometry):
             # verts_normals=[verts_normals.to(rc.device)],
         )
         return surface_mesh
+    
+    def get_covariance(self, return_full_matrix=False, return_sqrt=False, inverse_scales=False):
+        scaling = self.scaling
+        if inverse_scales:
+            scaling = 1. / scaling.clamp(min=1e-8)
+        scaled_rotation = quaternion_to_matrix(self.quaternions) * scaling[:, None]
+        if return_sqrt:
+            return scaled_rotation
+
+        cov3Dmatrix = scaled_rotation @ scaled_rotation.transpose(-1, -2)
+        if return_full_matrix:
+            return cov3Dmatrix
+
+        cov3D = torch.zeros((cov3Dmatrix.shape[0], 6), dtype=torch.float, device=self.device)
+        cov3D[:, 0] = cov3Dmatrix[:, 0, 0]
+        cov3D[:, 1] = cov3Dmatrix[:, 0, 1]
+        cov3D[:, 2] = cov3Dmatrix[:, 0, 2]
+        cov3D[:, 3] = cov3Dmatrix[:, 1, 1]
+        cov3D[:, 4] = cov3Dmatrix[:, 1, 2]
+        cov3D[:, 5] = cov3Dmatrix[:, 2, 2]
+
+        return cov3D
     
     def update_texture_features(self, square_size_in_texture=2):
         features = self.sh_coordinates.view(len(self.points), -1)
@@ -741,3 +788,152 @@ def eval_sh(deg, sh, dirs):
                             C4[7] * xz * (xx - 3 * yy) * sh[..., 23] +
                             C4[8] * (xx * (xx - 3 * yy) - yy * (3 * xx - yy)) * sh[..., 24])
     return result
+
+
+from ..utils.sugar_utils import getProjectionMatrix, getWorld2View2, fov2focal
+from pytorch3d.renderer import FoVPerspectiveCameras as P3DCameras
+from pytorch3d.renderer.cameras import _get_sfm_calibration_matrix
+
+class GSCamera(torch.nn.Module):
+    """Class to store Gaussian Splatting camera parameters.
+    """
+    def __init__(self, R, T, FoVx, FoVy, 
+                 image_height, image_width,
+                 trans=np.array([0.0, 0.0, 0.0]), 
+                 scale=1.0, 
+                 data_device = "cuda",
+                 ):
+        """
+        Args:
+            colmap_id (int): ID of the camera in the COLMAP reconstruction.
+            R (np.array): Rotation matrix.
+            T (np.array): Translation vector.
+            FoVx (float): Field of view in the x direction.
+            FoVy (float): Field of view in the y direction.
+            image (np.array): GT image.
+            gt_alpha_mask (_type_): _description_
+            image_name (_type_): _description_
+            uid (_type_): _description_
+            trans (_type_, optional): _description_. Defaults to np.array([0.0, 0.0, 0.0]).
+            scale (float, optional): _description_. Defaults to 1.0.
+            data_device (str, optional): _description_. Defaults to "cuda".
+            image_height (_type_, optional): _description_. Defaults to None.
+            image_width (_type_, optional): _description_. Defaults to None.
+
+        Raises:
+            ValueError: _description_
+        """
+        super(GSCamera, self).__init__()
+
+        self.R = R
+        self.T = T
+        self.FoVx = FoVx
+        self.FoVy = FoVy
+
+        try:
+            self.data_device = torch.device(data_device)
+        except Exception as e:
+            print(e)
+            print(f"[Warning] Custom device {data_device} failed, fallback to default cuda device" )
+            self.data_device = torch.device("cuda")
+
+        self.image_height = image_height
+        self.image_width = image_width
+
+        self.zfar = 100.0
+        self.znear = 0.01
+
+        self.trans = trans
+        self.scale = scale
+
+        self.world_view_transform = torch.tensor(getWorld2View2(R, T, trans, scale)).transpose(0, 1).cuda()
+        self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
+        self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
+        self.camera_center = self.world_view_transform.inverse()[3, :3]
+        
+    @property
+    def device(self):
+        return self.world_view_transform.device
+    
+    def to(self, device):
+        self.world_view_transform = self.world_view_transform.to(device)
+        self.projection_matrix = self.projection_matrix.to(device)
+        self.full_proj_transform = self.full_proj_transform.to(device)
+        self.camera_center = self.camera_center.to(device)
+        return self
+    
+def convert_camera_from_gs_to_pytorch3d(gs_cameras, device='cuda'):
+    """
+    From Gaussian Splatting camera parameters,
+    computes R, T, K matrices and outputs pytorch3d-compatible camera object.
+
+    Args:
+        gs_cameras (List of GSCamera): List of Gaussian Splatting cameras.
+        device (_type_, optional): _description_. Defaults to 'cuda'.
+
+    Returns:
+        p3d_cameras: pytorch3d-compatible camera object.
+    """
+    
+    N = len(gs_cameras)
+    
+    R = torch.Tensor(np.array([gs_camera.R for gs_camera in gs_cameras])).to(device)
+    T = torch.Tensor(np.array([gs_camera.T for gs_camera in gs_cameras])).to(device)
+    fx = torch.Tensor(np.array([fov2focal(gs_camera.FoVx, gs_camera.image_width) for gs_camera in gs_cameras])).to(device)
+    fy = torch.Tensor(np.array([fov2focal(gs_camera.FoVy, gs_camera.image_height) for gs_camera in gs_cameras])).to(device)
+    image_height = torch.tensor(np.array([gs_camera.image_height for gs_camera in gs_cameras]), dtype=torch.int).to(device)
+    image_width = torch.tensor(np.array([gs_camera.image_width for gs_camera in gs_cameras]), dtype=torch.int).to(device)
+    cx = image_width / 2.  # torch.zeros_like(fx).to(device)
+    cy = image_height / 2.  # torch.zeros_like(fy).to(device)
+    
+    w2c = torch.zeros(N, 4, 4).to(device)
+    w2c[:, :3, :3] = R.transpose(-1, -2)
+    w2c[:, :3, 3] = T
+    w2c[:, 3, 3] = 1
+    
+    c2w = w2c.inverse()
+    c2w[:, :3, 1:3] *= -1
+    c2w = c2w[:, :3, :]
+    
+    distortion_params = torch.zeros(N, 6).to(device)
+    camera_type = torch.ones(N, 1, dtype=torch.int32).to(device)
+
+    # Pytorch3d-compatible camera matrices
+    # Intrinsics
+    image_size = torch.Tensor(
+        [image_width[0], image_height[0]],
+    )[
+        None
+    ].to(device)
+    scale = image_size.min(dim=1, keepdim=True)[0] / 2.0
+    c0 = image_size / 2.0
+    p0_pytorch3d = (
+        -(
+            torch.Tensor(
+                (cx[0], cy[0]),
+            )[
+                None
+            ].to(device)
+            - c0
+        )
+        / scale
+    )
+    focal_pytorch3d = (
+        torch.Tensor([fx[0], fy[0]])[None].to(device) / scale
+    )
+    K = _get_sfm_calibration_matrix(
+        1, "cpu", focal_pytorch3d, p0_pytorch3d, orthographic=False
+    )
+    K = K.expand(N, -1, -1)
+
+    # Extrinsics
+    line = torch.Tensor([[0.0, 0.0, 0.0, 1.0]]).to(device).expand(N, -1, -1)
+    cam2world = torch.cat([c2w, line], dim=1)
+    world2cam = cam2world.inverse()
+    R, T = world2cam.split([3, 1], dim=-1)
+    R = R[:, :3].transpose(1, 2) * torch.Tensor([-1.0, 1.0, -1]).to(device)
+    T = T.squeeze(2)[:, :3] * torch.Tensor([-1.0, 1.0, -1]).to(device)
+
+    p3d_cameras = P3DCameras(device=device, R=R, T=T, K=K, znear=0.0001)
+
+    return p3d_cameras

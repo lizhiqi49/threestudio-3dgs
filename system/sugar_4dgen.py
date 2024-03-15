@@ -264,7 +264,7 @@ class SuGaR4DGen(BaseLift3DSystem):
                 + (normal[:, :, 1:, :] - normal[:, :, :-1, :]).square().mean(),
             )
 
-        if self.cfg.loss["lambda_tv"] > 0.0:
+        if self.cfg.loss["lambda_rgb_tv"] > 0.0:
             loss_rgb_tv = tv_loss(out["comp_rgb"].permute(0, 3, 1, 2))
             set_loss("rgb_tv", loss_rgb_tv)
 

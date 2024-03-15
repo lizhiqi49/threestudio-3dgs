@@ -17,6 +17,7 @@ from threestudio.models.geometry.base import BaseGeometry
 from threestudio.utils.misc import C
 from threestudio.utils.typing import *
 
+from einops import rearrange
 import pypose as pp
 import open3d as o3d
 from pytorch3d.ops import knn_points
@@ -180,17 +181,20 @@ class DynamicSuGaRModel(SuGaRModel):
 
         self.color_clip = C(self.cfg.color_clip, 0, iteration)
         
-    def get_gs_xyz_from_vertices(self, xyz_vert=None):
+    def get_gs_xyz_from_vertices(self, xyz_vert=None) -> Float[Tensor, "N_t N_gs 3"]:
         if self.binded_to_surface_mesh:
             if xyz_vert is None:
                 xyz_vert = self._points
             # First gather vertices of all triangles
-            faces_verts = xyz_vert[self._surface_mesh_faces]  # n_faces, 3, n_coords
+            if xyz_vert.ndim == 2:
+                xyz_vert = xyz_vert[None]   # (n_t, n_v, 3)
+            faces_verts = xyz_vert[:, self._surface_mesh_faces]  # (n_t, n_faces, 3, 3)
             
             # Then compute the points using barycenter coordinates in the surface triangles
-            points = faces_verts[:, None] * self.surface_triangle_bary_coords[None]  # n_faces, n_gaussians_per_face, 3, n_coords
-            points = points.sum(dim=-2)  # n_faces, n_gaussians_per_face, n_coords
-            points = points.reshape(self._n_points, 3)
+            points = faces_verts[:, :, None] * self.surface_triangle_bary_coords[None, None]  # n_t, n_faces, n_gaussians_per_face, 3, n_coords
+            points = points.sum(dim=-2)  # n_t, n_faces, n_gaussians_per_face, n_coords
+            # points = points.reshape(self._n_points, 3)
+            points = rearrange(points, "t f n c -> t (f n) c")
         else:
             raise ValueError("No vertices when with no mesh binded.")
         return points
@@ -228,16 +232,16 @@ class DynamicSuGaRModel(SuGaRModel):
                 xyz_v_timed = xyz_v_timed.reshape(timestamp.shape[-1], self._points.shape[0], 3)
         return xyz_v_timed
     
-    def get_timed_xyz_gs(self, timestamp=None, frame_idx=None):
+    def get_timed_xyz_gs(self, timestamp=None, frame_idx=None) -> Float[Tensor, "N_t N_gs 3"]:
         if self.binded_to_surface_mesh:
-            xyz_vert_timed = self.get_timed_xyz_vertices(timestamp, frame_idx)[0]
+            xyz_vert_timed = self.get_timed_xyz_vertices(timestamp, frame_idx)
             xyz_gs_timed = self.get_gs_xyz_from_vertices(xyz_vert_timed)
         else:
             raise NotImplementedError
         return xyz_gs_timed
     
     def get_timed_all(self, timestamp=None, frame_idx=None):
-        means3D = self.get_timed_xyz_gs(timestamp, frame_idx)
+        means3D = self.get_timed_xyz_gs(timestamp, frame_idx)[0]
         scales = self.get_scaling
         rotations = self.get_rotation
         opacity = self.get_opacity
@@ -269,7 +273,8 @@ class DynamicSuGaRModel(SuGaRModel):
             rot = rot + idt_quaternion
         return trans, rot
     
-    def get_timed_surface_mesh(self, 
+    def get_timed_surface_mesh(
+        self, 
         timestamp: Float[Tensor, "N_t"] = None, 
         frame_idx: Int[Tensor, "N_t"] = None
     ) -> Meshes:
@@ -282,6 +287,25 @@ class DynamicSuGaRModel(SuGaRModel):
             )
         )
         return surface_mesh
+    
+    def get_timed_face_normals(
+        self, 
+        timestamp: Float[Tensor, "N_t"] = None, 
+        frame_idx: Int[Tensor, "N_t"] = None
+    ) -> Float[Tensor, "N_t N_faces 3"]:
+        return F.normalize(
+            self.get_timed_surface_mesh(timestamp, frame_idx).faces_normals_padded(), 
+            dim=-1
+        )
+    
+    def get_timed_gs_normals(
+        self, 
+        timestamp: Float[Tensor, "N_t"] = None, 
+        frame_idx: Int[Tensor, "N_t"] = None
+    ) -> Float[Tensor, "N_t N_gs 3"]:
+        return self.get_timed_face_normals(timestamp, frame_idx).repeat_interleave(
+            self.cfg.n_gaussians_per_surface_triangle, dim=1
+        )
     
     def init_cubic_spliner(self):
         n_ctrl_knots = self.num_frames
