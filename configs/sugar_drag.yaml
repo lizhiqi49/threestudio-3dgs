@@ -5,10 +5,10 @@ seed: 0
 
 data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
-  video_frames_dir: ./load/animate-anyone-demo-vid
-  video_length: 68
+  video_frames_dir: ./load/wukong_oneframe
+  video_length: 1
   norm_timestamp: true
-  num_frames: 10
+  num_frames: 1
   height: [256, 512]
   width: [256, 512]
   resolution_milestones: [100]
@@ -51,8 +51,8 @@ system:
 
   geometry_type: "dynamic-sugar"
   geometry:
-    num_frames: 50
-    use_spline: true
+    num_frames: 1
+    use_spline: false
     use_deform_graph: true
 
     n_dg_nodes: 1000
@@ -74,8 +74,7 @@ system:
 
   exporter_type: "gaussian-mesh-exporter"
 
-  # renderer_type: "diff-gaussian-rasterizer-spacetime"
-  renderer_type: "diff-sugar-rasterizer-temporal"
+  renderer_type: "diff-gaussian-rasterizer-spacetime"
   renderer:
     debug: false
     invert_bg_prob: 1.0
@@ -131,7 +130,7 @@ system:
     ref_only_steps: 0
     guidance_eval: 0
     inter_frame_reg: 1
-    milestone_inter_frame_reg: 0
+    milestone_inter_frame_reg: 100000
     reset_arap_weight_matrices: 100
 
   loggers:
@@ -143,7 +142,7 @@ system:
   loss:
     lambda_sds_zero123: 0.1
     lambda_sds_2d: 0
-    lambda_sds_2d_img: 0 # 0.0001
+    lambda_sds_2d_img: 0.0001
     lambda_sds_vid: 0
     lambda_rgb: 1000.
     lambda_mask: 1000.
@@ -152,14 +151,9 @@ system:
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_normal_consistency: 10.
-    lambda_laplacian_smoothing: 0.
     lambda_3d_normal_smooth: 0.
     lambda_arap_reg: 0.01
     lambda_ref_xyz: 0
-    # tv losses
-    lambda_rgb_tv: 1.
-    lambda_depth_tv: 1.
-    lambda_normal_tv: 1.
 
 
   optimizer:

@@ -1,9 +1,14 @@
+from collections import defaultdict
+
 import numpy as np
 import torch
+import math
+from typing import NamedTuple
 from pytorch3d.ops import knn_points, estimate_pointcloud_normals
 from pytorch3d.transforms import quaternion_apply, matrix_to_quaternion, quaternion_to_matrix
 from ..geometry.gaussian_base import GaussianBaseModel
-from ..geometry.spacetime_gaussian import SpacetimeGaussianModel
+
+from threestudio.utils.typing import *
 
 scale_activation = torch.exp
 scale_inverse_activation = torch.log
@@ -53,6 +58,15 @@ def _initialize_radiuses_gauss_rasterizer(sugar):
 
     return res
 
+def get_one_ring_neighbors(faces) -> Dict[Int, List[Int]]:
+    mapping = defaultdict(set)
+    for f in faces:
+        for j in range(3):  # for each vert in the face
+            i, k = (j + 1) % 3, (j + 2) % 3 # get the 2 other vertices
+            mapping[f[j]].add(f[i])
+            mapping[f[j]].add(f[k])
+    orn = {k: list(v) for k, v in mapping.items()}  # convert to list
+    return orn
 
 def inverse_radius_fn(radiuses: torch.Tensor):
     scales = scale_inverse_activation(radiuses.expand(-1, -1, 3).clone())
@@ -62,7 +76,7 @@ def inverse_radius_fn(radiuses: torch.Tensor):
     return torch.cat([quaternions, scales], dim=-1)
 
 
-class SuGaR():
+class SuGaRRegularizer():
     def __init__(
         self,
         gaussians: GaussianBaseModel,
@@ -127,37 +141,14 @@ class SuGaR():
                 log_beta.to(self.gaussians.device),
             ).to(self.gaussians.device)
 
-        # time dependent 3d gaussian attr
-        self.time_points = None
-        self.time_scaling = None
-        self.time_strengths = None
-        self.time_quaternions = None
-
-    def set_tdep_attr(self, time_points=None, time_scaling=None, time_strengths=None, time_quaternions=None):
-        self.time_points = time_points
-        self.time_scaling = time_scaling
-        self.time_strengths = time_strengths
-        self.time_quaternions = time_quaternions
-
-    def set_tdep_knn(self, timestamp):
-        assert isinstance(timestamp, torch.Tensor)
-        assert self.ref_timestamps is not None
-        ref_timestamp_idx = torch.argmin((timestamp - self.ref_timestamps).abs())
-        ref_timestamp = self.ref_timestamps[ref_timestamp_idx]
-        key = "{:.{}f}".format(ref_timestamp, 1)
-        assert self.time_knn_dists.get(key) is not None
-        assert self.time_knn_idx.get(key) is not None
-        self.knn_idx = self.time_knn_idx[key]
-        self.knn_dists = self.time_knn_dists[key]
-
     @property
     def points(self):
-        return self.gaussians.get_xyz if self.time_points is None else self.time_points
+        return self.gaussians.get_xyz
 
     @property
     def scaling(self):
         if not self.binded_to_surface_mesh:
-            scales = self.gaussians.get_scaling if self.time_scaling is None else self.time_scaling
+            scales = self.gaussians.get_scaling
         else:
             scales = None
             # scales = torch.cat([
@@ -168,7 +159,7 @@ class SuGaR():
 
     @property
     def strengths(self):
-        return self.gaussians.get_opacity if self.time_strengths is None else self.time_strengths
+        return self.gaussians.get_opacity
 
     @property
     def n_points(self):
@@ -184,7 +175,7 @@ class SuGaR():
     @property
     def quaternions(self):
         if not self.binded_to_surface_mesh:
-            quaternions = self.gaussians.get_rotation if self.time_quaternions is None else self.time_quaternions
+            quaternions = self.gaussians.get_rotation
         else:
             quaternions = None
         return quaternions
@@ -238,7 +229,8 @@ class SuGaR():
 
         return random_points, random_indices
 
-    def reset_neighbors(self, knn_to_track: int = None, timestamp=None):
+    @torch.no_grad()
+    def reset_neighbors(self, knn_to_track: int = None):
         if self.binded_to_surface_mesh:
             print("WARNING! You should not reset the neighbors of a surface mesh.")
             print("Then, neighbors reset will be ignored.")
@@ -250,32 +242,16 @@ class SuGaR():
             else:
                 if knn_to_track is None:
                     knn_to_track = self.knn_to_track
-                    # Compute KNN
+            # Compute KNN
             with torch.no_grad():
                 self.knn_to_track = knn_to_track
-                if timestamp is None:
-                    knns = knn_points(self.points[None], self.points[None], K=knn_to_track)
-                    self.knn_dists = knns.dists[0]
-                    self.knn_idx = knns.idx[0]
-                    self.time_knn_dists = None
-                    self.time_knn_idx = None
-                    self.ref_timestamps = None
-                else:
-                    self.knn_dists = None
-                    self.knn_idx = None
-                    self.time_knn_dists = {}
-                    self.time_knn_idx = {}
-                    self.ref_timestamps = timestamp
-                    assert isinstance(self.gaussians, SpacetimeGaussianModel)
-                    for idx in range(timestamp.shape[0]):
-                        t = timestamp[idx]
-                        key = "{:.{}f}".format(t, 1)
-                        if self.time_knn_dists.get(key) is not None:
-                            continue
-                        points = self.gaussians.get_timed_xyz(t)
-                        knns = knn_points(points[None], points[None], K=knn_to_track)
-                        self.time_knn_idx[key] = knns.idx[0]
-                        self.time_knn_dists[key] = knns.dists[0]
+                knns = knn_points(self.points[None], self.points[None], K=knn_to_track)
+                self.knn_dists = knns.dists[0]
+                self.knn_idx = knns.idx[0]
+                self.time_knn_dists = None
+                self.time_knn_idx = None
+                self.ref_timestamps = None
+
 
     def get_covariance(self, return_full_matrix=False, return_sqrt=False, inverse_scales=False):
         scaling = self.scaling
@@ -697,108 +673,163 @@ class SuGaR():
         save_milestones = [9000, 12_000, 15_000]
 
         # new
-        current_step = args.current_step
         # batch_visibility_filter = args.outputs['visibility_filter']
         n_samples_for_sdf_regularization = args.n_samples_for_sdf_regularization
-        start_sdf_better_normal_from = args.start_sdf_better_normal_from
         use_sdf_better_normal_loss = args.use_sdf_better_normal_loss
         sdf_better_normal_gradient_through_normal_only = use_sdf_better_normal_loss
-        batch_timestamp = args.timestamp
         # ====================Parameters==================== #
 
         # ====================Regulation loss==================== #
-        batch_size = len(batch_timestamp)
-        batch_visibility_filter = torch.ones(batch_size, self.gaussians._xyz.shape[0]).bool().cuda()
+        visibility_filter = torch.ones(self.gaussians._xyz.shape[0]).bool().cuda()
         loss = {"density_regulation": 0, "normal_regulation": 0}
 
-        for batch_idx in range(batch_size):
-            # set time dependent params
-            if batch_timestamp is not None:
-                assert isinstance(self.gaussians, SpacetimeGaussianModel)
-                timestamp = batch_timestamp[batch_idx]
-                time_points, time_scaling, time_quaternions, time_strengths, _ = self.gaussians.get_timed_all(timestamp)
-                self.set_tdep_attr(time_points=time_points, time_scaling=time_scaling,
-                                   time_strengths=time_strengths, time_quaternions=time_quaternions)
-                self.set_tdep_knn(timestamp)
+        sampling_mask = visibility_filter
+        n_gaussians_in_sampling = sampling_mask.sum()
+        if n_gaussians_in_sampling > 0:
+            sdf_samples, sdf_gaussian_idx = self.sample_points_in_gaussians(
+                num_samples=n_samples_for_sdf_regularization,
+                sampling_scale_factor=sdf_sampling_scale_factor,
+                mask=sampling_mask,
+                probabilities_proportional_to_volume=sdf_sampling_proportional_to_volume,
+            )
+
+            fields = self.get_field_values(
+                sdf_samples, sdf_gaussian_idx,
+                return_sdf=False,
+                density_threshold=density_threshold,
+                density_factor=density_factor,
+                return_sdf_grad=False,
+                sdf_grad_max_value=10.,
+                return_closest_gaussian_opacities=use_sdf_better_normal_loss,
+                return_beta=True)
+
+            # Compute the depth of the points in the gaussians
+            proj_mask = torch.ones_like(sdf_samples[..., 0], dtype=torch.bool)
+            samples_gaussian_normals = self.get_normals(estimate_from_points=False)[
+                sdf_gaussian_idx]
+            sdf_estimation = ((sdf_samples - self.points[
+                sdf_gaussian_idx]) * samples_gaussian_normals).sum(
+                dim=-1)  # Shape is (n_samples,)
+
+            # Compute sdf estimation loss
+            beta = fields['beta'][proj_mask]
+            densities = fields['density'][proj_mask]
+            target_densities = torch.exp(-0.5 * sdf_estimation.pow(2) / beta.pow(2))
+            if squared_sdf_estimation_loss:
+                sdf_estimation_loss = ((densities - target_densities)).pow(2)
             else:
-                self.set_tdep_attr()
+                sdf_estimation_loss = (densities - target_densities).abs()
+            loss["density_regulation"] += sdf_estimation_loss.mean()
 
-            visibility_filter = batch_visibility_filter[batch_idx]
-            sampling_mask = visibility_filter
-            n_gaussians_in_sampling = sampling_mask.sum()
-            if n_gaussians_in_sampling > 0:
-                sdf_samples, sdf_gaussian_idx = self.sample_points_in_gaussians(
-                    num_samples=n_samples_for_sdf_regularization,
-                    sampling_scale_factor=sdf_sampling_scale_factor,
-                    mask=sampling_mask,
-                    probabilities_proportional_to_volume=sdf_sampling_proportional_to_volume,
-                )
+            # Compute sdf better normal loss
+            if use_sdf_better_normal_loss:
+                closest_gaussians_idx = self.knn_idx[sdf_gaussian_idx]
+                closest_min_scaling = self.scaling.min(dim=-1)[0][closest_gaussians_idx].detach().view(
+                    len(sdf_samples), -1)
 
-                fields = self.get_field_values(
-                    sdf_samples, sdf_gaussian_idx,
-                    return_sdf=False,
-                    density_threshold=density_threshold,
-                    density_factor=density_factor,
-                    return_sdf_grad=False,
-                    sdf_grad_max_value=10.,
-                    return_closest_gaussian_opacities=use_sdf_better_normal_loss and current_step >= start_sdf_better_normal_from,
-                    return_beta=True)
+                # Compute normals and flip their sign if needed
+                gaussians_normals = self.get_normals(estimate_from_points=False)
+                closest_gaussian_normals = gaussians_normals[closest_gaussians_idx]
+                samples_gaussian_normals = gaussians_normals[sdf_gaussian_idx]
+                closest_gaussian_normals = closest_gaussian_normals * torch.sign(
+                    (closest_gaussian_normals * samples_gaussian_normals[:, None]).sum(dim=-1,
+                                                                                        keepdim=True)).detach()
 
-                # Compute the depth of the points in the gaussians
-                proj_mask = torch.ones_like(sdf_samples[..., 0], dtype=torch.bool)
-                samples_gaussian_normals = self.get_normals(estimate_from_points=False)[
-                    sdf_gaussian_idx]
-                sdf_estimation = ((sdf_samples - self.points[
-                    sdf_gaussian_idx]) * samples_gaussian_normals).sum(
-                    dim=-1)  # Shape is (n_samples,)
+                # Compute weights for normal regularization, based on the gradient of the sdf
+                closest_gaussian_opacities = fields['closest_gaussian_opacities'].detach()
+                normal_weights = ((sdf_samples[:, None] - self.points[
+                    closest_gaussians_idx]) * closest_gaussian_normals).sum(
+                    dim=-1).abs()  # Shape is (n_samples, n_neighbors)
+                if sdf_better_normal_gradient_through_normal_only:
+                    normal_weights = normal_weights.detach()
+                normal_weights = closest_gaussian_opacities * normal_weights / closest_min_scaling.clamp(
+                    min=1e-6) ** 2  # Shape is (n_samples, n_neighbors)
 
-                # Compute sdf estimation loss
-                beta = fields['beta'][proj_mask]
-                densities = fields['density'][proj_mask]
-                target_densities = torch.exp(-0.5 * sdf_estimation.pow(2) / beta.pow(2))
-                if squared_sdf_estimation_loss:
-                    sdf_estimation_loss = ((densities - target_densities)).pow(2)
-                else:
-                    sdf_estimation_loss = (densities - target_densities).abs()
-                loss["density_regulation"] += sdf_estimation_loss.mean()
+                # The weights should have a sum of 1 because of the eikonal constraint
+                normal_weights_sum = normal_weights.sum(dim=-1).detach()  # Shape is (n_samples,)
+                normal_weights = normal_weights / normal_weights_sum.unsqueeze(-1).clamp(
+                    min=1e-6)  # Shape is (n_samples, n_neighbors)
 
-                # Compute sdf better normal loss
-                if use_sdf_better_normal_loss and (current_step >= start_sdf_better_normal_from):
-                    closest_gaussians_idx = self.knn_idx[sdf_gaussian_idx]
-                    closest_min_scaling = self.scaling.min(dim=-1)[0][closest_gaussians_idx].detach().view(
-                        len(sdf_samples), -1)
-
-                    # Compute normals and flip their sign if needed
-                    gaussians_normals = self.get_normals(estimate_from_points=False)
-                    closest_gaussian_normals = gaussians_normals[closest_gaussians_idx]
-                    samples_gaussian_normals = gaussians_normals[sdf_gaussian_idx]
-                    closest_gaussian_normals = closest_gaussian_normals * torch.sign(
-                        (closest_gaussian_normals * samples_gaussian_normals[:, None]).sum(dim=-1,
-                                                                                           keepdim=True)).detach()
-
-                    # Compute weights for normal regularization, based on the gradient of the sdf
-                    closest_gaussian_opacities = fields['closest_gaussian_opacities'].detach()
-                    normal_weights = ((sdf_samples[:, None] - self.points[
-                        closest_gaussians_idx]) * closest_gaussian_normals).sum(
-                        dim=-1).abs()  # Shape is (n_samples, n_neighbors)
-                    if sdf_better_normal_gradient_through_normal_only:
-                        normal_weights = normal_weights.detach()
-                    normal_weights = closest_gaussian_opacities * normal_weights / closest_min_scaling.clamp(
-                        min=1e-6) ** 2  # Shape is (n_samples, n_neighbors)
-
-                    # The weights should have a sum of 1 because of the eikonal constraint
-                    normal_weights_sum = normal_weights.sum(dim=-1).detach()  # Shape is (n_samples,)
-                    normal_weights = normal_weights / normal_weights_sum.unsqueeze(-1).clamp(
-                        min=1e-6)  # Shape is (n_samples, n_neighbors)
-
-                    # Compute regularization loss
-                    sdf_better_normal_loss = (samples_gaussian_normals - (
-                        normal_weights[..., None] * closest_gaussian_normals).sum(dim=-2)
-                                              ).pow(2).sum(dim=-1)  # Shape is (n_samples,)
-                    loss['normal_regulation'] += sdf_better_normal_loss.mean()
-
-        for k, v in loss.items():
-            loss[k] = v / batch_size
-        self.set_tdep_attr()
+                # Compute regularization loss
+                sdf_better_normal_loss = (samples_gaussian_normals - (
+                    normal_weights[..., None] * closest_gaussian_normals).sum(dim=-2)
+                                            ).pow(2).sum(dim=-1)  # Shape is (n_samples,)
+                loss['normal_regulation'] += sdf_better_normal_loss.mean()
         # ====================Regulation loss==================== #
         return loss
+
+class BasicPointCloud(NamedTuple):
+    points : np.array
+    colors : np.array
+    normals : np.array
+
+def geom_transform_points(points, transf_matrix):
+    P, _ = points.shape
+    ones = torch.ones(P, 1, dtype=points.dtype, device=points.device)
+    points_hom = torch.cat([points, ones], dim=1)
+    points_out = torch.matmul(points_hom, transf_matrix.unsqueeze(0))
+
+    denom = points_out[..., 3:] + 0.0000001
+    return (points_out[..., :3] / denom).squeeze(dim=0)
+
+# def getWorld2View(R, t):
+#     Rt = np.zeros((4, 4))
+#     Rt[:3, :3] = R.transpose()
+#     Rt[:3, 3] = t
+#     Rt[3, 3] = 1.0
+#     return np.float32(Rt)
+
+def getWorld2View(R, t, tensor=False):
+    if tensor:
+        Rt = torch.zeros(4, 4, device=R.device)
+        Rt[..., :3, :3] = R.transpose(-1, -2)
+        Rt[..., :3, 3] = t
+        Rt[..., 3, 3] = 1.0
+        return Rt
+    else:
+        Rt = np.zeros((4, 4))
+        Rt[:3, :3] = R.transpose()
+        Rt[:3, 3] = t
+        Rt[3, 3] = 1.0
+        return np.float32(Rt)
+
+def getWorld2View2(R, t, translate=np.array([.0, .0, .0]), scale=1.0):
+    Rt = np.zeros((4, 4))
+    Rt[:3, :3] = R.transpose()
+    Rt[:3, 3] = t
+    Rt[3, 3] = 1.0
+
+    C2W = np.linalg.inv(Rt)
+    cam_center = C2W[:3, 3]
+    cam_center = (cam_center + translate) * scale
+    C2W[:3, 3] = cam_center
+    Rt = np.linalg.inv(C2W)
+    return np.float32(Rt)
+
+def getProjectionMatrix(znear, zfar, fovX, fovY):
+    tanHalfFovY = math.tan((fovY / 2))
+    tanHalfFovX = math.tan((fovX / 2))
+
+    top = tanHalfFovY * znear
+    bottom = -top
+    right = tanHalfFovX * znear
+    left = -right
+
+    P = torch.zeros(4, 4)
+
+    z_sign = 1.0
+
+    P[0, 0] = 2.0 * znear / (right - left)
+    P[1, 1] = 2.0 * znear / (top - bottom)
+    P[0, 2] = (right + left) / (right - left)
+    P[1, 2] = (top + bottom) / (top - bottom)
+    P[3, 2] = z_sign
+    P[2, 2] = z_sign * zfar / (zfar - znear)
+    P[2, 3] = -(zfar * znear) / (zfar - znear)
+    return P
+
+def fov2focal(fov, pixels):
+    return pixels / (2 * math.tan(fov / 2))
+
+def focal2fov(focal, pixels):
+    return 2*math.atan(pixels/(2*focal))

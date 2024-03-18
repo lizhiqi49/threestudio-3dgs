@@ -217,6 +217,7 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
 
         geometry_convert_from: str = ""
         load_ply_only_vertex: bool = False
+        load_vertex_only_position: bool = False
         init_num_pts: int = 100
         pc_init_radius: float = 0.8
         opacity_init: float = 0.1
@@ -321,7 +322,11 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
                     positions = np.vstack(
                         [vertices["x"], vertices["y"], vertices["z"]]
                     ).T
-                    if vertices.__contains__("red"):
+                    # ===== only for experiment, should be removed later ===== #
+                    trans = np.array([[0, 1, 0], [0, 0, 1], [1, 0, 0]])
+                    positions = positions @ trans
+                    # ===== only for experiment, should be removed later ===== #
+                    if vertices.__contains__("red") and not self.cfg.load_vertex_only_position:
                         colors = (
                             np.vstack(
                                 [vertices["red"], vertices["green"], vertices["blue"]]
@@ -820,7 +825,8 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
         visibility_filter,
         radii,
         viewspace_point_tensor,
-    ):
+    ):  
+        self.pruned_or_densified = False
         if self.cfg.sugar_prune_at is not None and iteration == self.cfg.sugar_prune_at:
             self.pruned_or_densified = True
             prune_mask = (self.get_opacity < self.cfg.sugar_prune_threshold).squeeze()

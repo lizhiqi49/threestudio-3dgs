@@ -19,11 +19,10 @@ from threestudio.utils.misc import C
 from torch.cuda.amp import autocast
 from torchmetrics import PearsonCorrCoef
 
-from pytorch3d.loss import mesh_normal_consistency
+from pytorch3d.loss import mesh_normal_consistency, mesh_laplacian_smoothing
 
 from ..geometry.gaussian_base import BasicPointCloud, Camera
 from ..geometry.dynamic_sugar import DynamicSuGaRModel
-from ..sugar.sugar_model import SuGaR
 from ..utils.arap_utils import ARAPCoach
 
 @threestudio.register("sugar-4dgen-system")
@@ -222,14 +221,23 @@ class SuGaR4DGen(BaseLift3DSystem):
                     1 - F.cosine_similarity(valid_pred_normal, valid_gt_normal).mean(),
                 )
 
-            if self.C(self.cfg.loss.lambda_normal_consistency) > 0:
+            if (
+                self.C(self.cfg.loss.lambda_normal_consistency) > 0
+                or self.C(self.cfg.loss.lambda_laplacian_smoothing) > 0
+            ):
                 surface_meshes = self.geometry.get_timed_surface_mesh(
                     timestamp=batch["timestamp"], frame_idx=batch["frame_indices"]
                 )
-                set_loss(
-                    "normal_consistency",
-                    mesh_normal_consistency(surface_meshes)
-                )
+                if self.C(self.cfg.loss.lambda_normal_consistency) > 0:
+                    set_loss(
+                        "normal_consistency",
+                        mesh_normal_consistency(surface_meshes)
+                    )
+                if self.C(self.cfg.loss.lambda_laplacian_smoothing) > 0:
+                    set_loss(
+                        "laplacian_smoothing",
+                        mesh_laplacian_smoothing(surface_meshes, "uniform")
+                    )
                 
         elif guidance == "zero123":
             # zero123
@@ -242,6 +250,7 @@ class SuGaR4DGen(BaseLift3DSystem):
             # claforte: TODO: rename the loss_terms keys
             set_loss("sds_zero123", guidance_out["loss_sds"])
 
+        # Regularization
         if self.C(self.cfg.loss.lambda_normal_smooth) > 0:
             if "comp_normal" not in out:
                 raise ValueError(
@@ -253,6 +262,24 @@ class SuGaR4DGen(BaseLift3DSystem):
                 (normal[:, 1:, :, :] - normal[:, :-1, :, :]).square().mean()
                 + (normal[:, :, 1:, :] - normal[:, :, :-1, :]).square().mean(),
             )
+
+        if self.cfg.loss["lambda_rgb_tv"] > 0.0:
+            loss_rgb_tv = tv_loss(out["comp_rgb"].permute(0, 3, 1, 2))
+            set_loss("rgb_tv", loss_rgb_tv)
+
+        if (
+            out.__contains__("comp_depth")
+            and self.cfg.loss["lambda_depth_tv"] > 0.0
+        ):
+            loss_depth_tv = tv_loss(out["comp_depth"].permute(0, 3, 1, 2))
+            set_loss("depth_tv", loss_depth_tv)
+
+        if (
+            out.__contains__("comp_normal")
+            and self.cfg.loss["lambda_normal_tv"] > 0.0
+        ):
+            loss_normal_tv = tv_loss(out["comp_normal"].permute(0, 3, 1, 2))
+            set_loss("normal_tv", loss_normal_tv)
         
         if self.stage != "static" and guidance == "ref" and self.C(self.cfg.loss.lambda_ref_xyz) > 0:
             xyz_f0 = self.geometry.get_timed_xyz_vertices(torch.as_tensor(0, dtype=torch.float32, device=self.device))
@@ -472,7 +499,11 @@ class SuGaR4DGen(BaseLift3DSystem):
                     "timestamp": torch.as_tensor(
                         [batch["index"] / batch["n_all_views"]], device=self.device
                     ),
-                    "frame_idx": torch.as_tensor(batch_idx, device=self.device)
+                    "frame_indices": (
+                        torch.as_tensor([batch_idx], device=self.device)
+                        if self.geometry.num_frames > 1 else 
+                        torch.as_tensor([0], device=self.device)
+                    )
                 }
             )
         out = self(batch)
@@ -514,7 +545,7 @@ class SuGaR4DGen(BaseLift3DSystem):
             step=self.true_global_step,
         )
 
-        if self.stage != "static":
+        if self.stage != "static" and self.geometry.num_frames > 1:
             if batch["index"] == 0:
                 self.batch_ref_eval = batch
 

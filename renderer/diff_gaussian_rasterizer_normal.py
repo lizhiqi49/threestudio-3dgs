@@ -51,11 +51,12 @@ class Depth2Normal(torch.nn.Module):
         return normal
 
 
-@threestudio.register("diff-gaussian-rasterizer-shading")
+@threestudio.register("diff-gaussian-rasterizer-normal")
 class DiffGaussian(Rasterizer, GaussianBatchRenderer):
     @dataclass
     class Config(Rasterizer.Config):
         debug: bool = False
+        invert_bg_prob: float = 1.0
         back_ground_color: Tuple[float, float, float] = (1, 1, 1)
 
     cfg: Config
@@ -66,10 +67,9 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         material: BaseMaterial,
         background: BaseBackground,
     ) -> None:
-        if not isinstance(material, GaussianDiffuseWithPointLightMaterial):
-            raise NotImplementedError(
-                "diff-gaussian-rasterizer-shading only support Gaussian material."
-            )
+        threestudio.info(
+            "[Note] Gaussian Splatting doesn't support material and background now."
+        )
         super().configure(geometry, material, background)
         self.normal_module = Depth2Normal()
         self.background_tensor = torch.tensor(
@@ -82,7 +82,6 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         bg_color: torch.Tensor,
         scaling_modifier=1.0,
         override_color=None,
-        override_bg_color=None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -90,8 +89,12 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
 
         Background tensor (bg_color) must be on GPU!
         """
-        # use neural background
-        bg_color = bg_color * 0
+        if self.training:
+            invert_bg_color = np.random.rand() > self.cfg.invert_bg_prob
+        else:
+            invert_bg_color = True
+
+        bg_color = bg_color if not invert_bg_color else (1.0 - bg_color)
 
         pc = self.geometry
         # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
@@ -166,11 +169,6 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         )
         _, H, W = rendered_image.shape
 
-        if override_bg_color is not None:
-            comp_rgb_bg = override_bg_color.expand(1, H, W, -1)
-        else:
-            comp_rgb_bg = self.background(dirs=rays_d.unsqueeze(0))
-
         xyz_map = rays_o + rendered_depth.permute(1, 2, 0) * rays_d
         normal_map = self.normal_module(xyz_map.permute(2, 0, 1).unsqueeze(0))[0]
         normal_map = F.normalize(normal_map, dim=0)
@@ -188,24 +186,6 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         else:
             pred_normal_map = None
 
-        light_positions = kwargs["light_positions"][batch_idx, None, None, :].expand(
-            H, W, -1
-        )
-
-        if pred_normal_map is not None:
-            shading_normal = pred_normal_map.permute(1, 2, 0).detach() * 2 - 1
-            shading_normal = F.normalize(shading_normal, dim=2)
-        else:
-            shading_normal = normal_map.permute(1, 2, 0)
-        rgb_fg = self.material(
-            positions=xyz_map,
-            shading_normal=shading_normal,
-            albedo=(rendered_image / (rendered_alpha + 1e-6)).permute(1, 2, 0),
-            light_positions=light_positions,
-        ).permute(2, 0, 1)
-        rendered_image = rgb_fg * rendered_alpha + (
-            1 - rendered_alpha
-        ) * comp_rgb_bg.reshape(H, W, 3).permute(2, 0, 1)
         normal_map = normal_map * 0.5 * rendered_alpha + 0.5
         mask = rendered_alpha > 0.99
         normal_mask = mask.repeat(3, 1, 1)
@@ -227,5 +207,4 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             "viewspace_points": screenspace_points,
             "visibility_filter": radii > 0,
             "radii": radii,
-            "comp_rgb_bg": comp_rgb_bg,
         }

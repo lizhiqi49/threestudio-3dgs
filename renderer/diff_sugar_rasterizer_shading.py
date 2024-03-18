@@ -15,6 +15,7 @@ from threestudio.models.materials.base import BaseMaterial
 from threestudio.models.renderers.base import Rasterizer
 from threestudio.utils.typing import *
 
+from ..geometry.sugar import SuGaRModel
 from ..material.gaussian_material import GaussianDiffuseWithPointLightMaterial
 from .gaussian_batch_renderer import GaussianBatchRenderer
 
@@ -51,8 +52,8 @@ class Depth2Normal(torch.nn.Module):
         return normal
 
 
-@threestudio.register("diff-gaussian-rasterizer-shading")
-class DiffGaussian(Rasterizer, GaussianBatchRenderer):
+@threestudio.register("diff-sugar-rasterizer-shading")
+class DiffSuGaR(Rasterizer, GaussianBatchRenderer):
     @dataclass
     class Config(Rasterizer.Config):
         debug: bool = False
@@ -93,7 +94,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         # use neural background
         bg_color = bg_color * 0
 
-        pc = self.geometry
+        pc: SuGaRModel = self.geometry
         # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
         screenspace_points = (
             torch.zeros_like(
@@ -170,33 +171,28 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             comp_rgb_bg = override_bg_color.expand(1, H, W, -1)
         else:
             comp_rgb_bg = self.background(dirs=rays_d.unsqueeze(0))
-
+        
         xyz_map = rays_o + rendered_depth.permute(1, 2, 0) * rays_d
-        normal_map = self.normal_module(xyz_map.permute(2, 0, 1).unsqueeze(0))[0]
+        # normal_map = self.normal_module(xyz_map.permute(2, 0, 1).unsqueeze(0))[0]
+        # normal_map = F.normalize(normal_map, dim=0)
+        point_normals = pc.get_gs_normals
+        normal_map, _, _, _ = rasterizer(
+            means3D=means3D,
+            means2D=torch.zeros_like(means2D),
+            shs=None,
+            colors_precomp=point_normals,
+            opacities=opacity,
+            scales=scales,
+            rotations=rotations,
+            cov3D_precomp=cov3D_precomp,
+        )
         normal_map = F.normalize(normal_map, dim=0)
-        if pc.cfg.pred_normal:
-            pred_normal_map, _, _, _ = rasterizer(
-                means3D=means3D,
-                means2D=torch.zeros_like(means2D),
-                shs=pc.get_normal.unsqueeze(1),
-                colors_precomp=None,
-                opacities=opacity,
-                scales=scales,
-                rotations=rotations,
-                cov3D_precomp=cov3D_precomp,
-            )
-        else:
-            pred_normal_map = None
 
         light_positions = kwargs["light_positions"][batch_idx, None, None, :].expand(
             H, W, -1
         )
 
-        if pred_normal_map is not None:
-            shading_normal = pred_normal_map.permute(1, 2, 0).detach() * 2 - 1
-            shading_normal = F.normalize(shading_normal, dim=2)
-        else:
-            shading_normal = normal_map.permute(1, 2, 0)
+        shading_normal = normal_map.permute(1, 2, 0)
         rgb_fg = self.material(
             positions=xyz_map,
             shading_normal=shading_normal,
@@ -221,7 +217,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         return {
             "render": rendered_image.clamp(0, 1),
             "normal": normal_map,
-            "pred_normal": pred_normal_map,
+            # "pred_normal": pred_normal_map,
             "mask": rendered_alpha,
             "depth": rendered_depth,
             "viewspace_points": screenspace_points,
