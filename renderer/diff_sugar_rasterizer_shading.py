@@ -179,14 +179,14 @@ class DiffSuGaR(Rasterizer, GaussianBatchRenderer):
         normal_map, _, _, _ = rasterizer(
             means3D=means3D,
             means2D=torch.zeros_like(means2D),
-            shs=point_normals.unsqueeze(1),
-            colors_precomp=None,
+            shs=None,
+            colors_precomp=point_normals,
             opacities=opacity,
             scales=scales,
             rotations=rotations,
             cov3D_precomp=cov3D_precomp,
         )
-        normal_map = F.normalize(normal_map * 2 - 1, dim=0)
+        normal_map = F.normalize(normal_map, dim=0)
 
         light_positions = kwargs["light_positions"][batch_idx, None, None, :].expand(
             H, W, -1
