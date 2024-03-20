@@ -58,7 +58,7 @@ system:
 
     n_gaussians_per_surface_triangle: 6
     learnable_positions: true
-    surface_mesh_to_bind_path: ""
+    surface_mesh_to_bind_path: "/cym/Project/CVGL-4DGen-Project/outputs/sugar-mesh/sugarmesh_vanilla3dgs_level0.3_decim200000_pd7.ply"
 
     init_gs_opacity: 0.9
 
@@ -91,19 +91,19 @@ system:
     min_step_percent: 0.2
     max_step_percent: 0.5
 
-  prompt_processor_2d_type: "stable-diffusion-prompt-processor"
+  prompt_processor_2d_type: ""
   prompt_processor_2d:
     pretrained_model_name_or_path: ${system.guidance_2d.pretrained_model_name_or_path}
-    prompt: ???
+    prompt: ""
     negative_prompt: "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, poor lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions"
     front_threshold: 30.0
     back_threshold: 30.0
     use_perp_neg: false
 
-  guidance_2d_type: "stable-diffusion-vsd-guidance"
+  guidance_2d_type: null
   guidance_2d:
-    pretrained_model_name_or_path: "/home/lzq/workspace/huggingface_models/stabilityai--stable-diffusion-2-1-base"
-    pretrained_model_name_or_path_lora: "/home/lzq/workspace/huggingface_models/stabilityai--stable-diffusion-2-1"
+    pretrained_model_name_or_path: "/cym/model/stabilityai--stable-diffusion-2-1-base"
+    pretrained_model_name_or_path_lora: "/cym/model/stabilityai--stable-diffusion-2-1-base"
     guidance_scale: 7.5
     min_step_percent: 0.02
     max_step_percent: 0.50

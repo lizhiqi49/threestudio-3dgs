@@ -5,7 +5,7 @@ seed: 0
 
 data_type: "single-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
-  image_path: ./load/images/hamburger_rgba.png
+  image_path: ./load/images/csm_luigi_rgba.png
   height: [128, 256, 512]
   width: [128, 256, 512]
   resolution_milestones: [200, 300]
@@ -47,6 +47,7 @@ system:
   # SuGaR reg
   use_sugar_reg: true
   knn_to_track: 16
+  n_samples_for_sugar_sdf_reg: 500000
 
   geometry_type: "gaussian-splatting"
   geometry:
@@ -66,6 +67,7 @@ system:
     min_opac_prune: 0.005
     split_thresh: 0.02
     radii2d_thresh: 1000
+    max_num: 100000
 
     sphere: False
 
@@ -129,7 +131,7 @@ system:
     guidance_eval: 0
     input_normal: 2
     start_sugar_reg: 3000
-    reset_neighbors: 50
+    reset_neighbors: 100
 
   loggers:
     wandb:
@@ -152,9 +154,9 @@ system:
     lambda_laplacian_smoothing: 1.
 
     # For sugar
-    lambda_opacity_binary: 1.
-    lambda_sugar_density_reg: 1.
-    lambda_sugar_sdf_normal_reg: 1.
+    lambda_opacity_binary: [2000, 10., 10., 3000]
+    lambda_sugar_density_reg: [3000, 1., 1., 8000]
+    lambda_sugar_sdf_normal_reg: [3000, 10., 10., 8000]
 
     # tv reg
     lambda_rgb_tv: 1.0
@@ -173,7 +175,7 @@ system:
 
 
 trainer:
-  max_steps: 5000
+  max_steps: 8000
   log_every_n_steps: 1
   num_sanity_val_steps: 0
   val_check_interval: 100

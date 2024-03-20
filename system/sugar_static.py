@@ -41,7 +41,7 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
         back_ground_color: Tuple[float, float, float] = (1, 1, 1)
 
         # Maybe use 2D diffusion prior
-        prompt_processor_2d_type: str = ""
+        prompt_processor_2d_type: Optional[str] = None
         prompt_processor_2d: dict = field(default_factory=dict)
 
         guidance_2d_type: Optional[str] = None
@@ -65,7 +65,7 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
 
         # Zero123
         self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
-        
+
         # Maybe use 2D diffusion guidance
         if self.cfg.guidance_2d_type is not None:
             self.prompt_processor_2d = threestudio.find(self.cfg.prompt_processor_2d_type)(
@@ -88,7 +88,7 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
         else:
             self.merged_optimizer = False
         return [optim]
-    
+
     def on_fit_start(self) -> None:
         super().on_fit_start()
         self._render_type = "rgb"
@@ -110,8 +110,8 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
         #     self.geometry.update_texture_features(self.geometry.cfg.square_size_in_texture)
 
     def forward(
-        self, 
-        batch: Dict[str, Any], 
+        self,
+        batch: Dict[str, Any],
         compute_color_in_rasterizer: bool = False
     ) -> Dict[str, Any]:
         self.geometry.update_learning_rate(self.global_step)
@@ -234,7 +234,7 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
                 else:
                     guidance_2d_inp = out["comp_rgb"]
                 guidance_out_2d = self.guidance_2d(
-                    guidance_2d_inp, 
+                    guidance_2d_inp,
                     self.prompt_utils_2d,
                     **batch,
                 )
@@ -257,7 +257,7 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
 
             if self.stage == "gaussian" and self.sugar_reg is not None:
                 ## cross entropy loss for opacity to make it binary
-                if self.C(self.cfg.loss.lambda_opacity_binary) > 0:
+                if self.C(self.cfg.loss.lambda_opacity_binary, interpolation='interval') > 0:
                     # only use in static stage
                     visibility_filter = out["visibility_filter"]
                     opacity = self.geometry.get_opacity.unsqueeze(0).repeat(len(visibility_filter), 1, 1)
@@ -267,9 +267,9 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
                         -(vis_opacities * torch.log(vis_opacities + 1e-10)
                         + (1 - vis_opacities) * torch.log(1 - vis_opacities + 1e-10)).mean()
                     )
-                    
-                if self.C(self.cfg.loss.lambda_sugar_density_reg) > 0:
-                    use_sdf_normal_reg = self.C(self.cfg.loss.lambda_sugar_sdf_normal_reg) > 0
+
+                if self.C(self.cfg.loss.lambda_sugar_density_reg, interpolation='interval') > 0:
+                    use_sdf_normal_reg = self.C(self.cfg.loss.lambda_sugar_sdf_normal_reg, interpolation='interval') > 0
                     coarse_args = EasyDict(
                         {
                             # "outputs": out,
@@ -281,7 +281,7 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
                     set_loss("sugar_density_reg", dloss["density_regulation"])
                     if use_sdf_normal_reg:
                         set_loss("sugar_sdf_normal_reg", dloss["normal_regulation"])
-                    
+
 
             if self.stage == "sugar":
                 surface_mesh = self.geometry.surface_mesh
@@ -295,7 +295,7 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
                         "laplacian_smoothing",
                         mesh_laplacian_smoothing(surface_mesh, "uniform")
                     )
-                    
+
                 if self.C(self.cfg.loss.lambda_opacity_max) > 0:
                     set_loss(
                         "opacity_max",
@@ -352,7 +352,7 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
                 prog_bar=True,
                 logger=True,
             )
-        
+
         out_ref = self.training_substep(batch, batch_idx, guidance="ref")
         total_loss += out_ref["loss"]
 
@@ -365,7 +365,7 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
 
         if self.stage == "gaussian":
             total_loss.backward()
-            
+
             visibility_filter = out_rand["visibility_filter"]
             radii = out_rand["radii"]
             viewspace_point_tensor = out_rand["viewspace_points"]
@@ -460,7 +460,7 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
             name="validation_epoch_end",
             step=self.true_global_step,
         )
-    
+
         # Compute quantile of gaussian opacities
         n_quantiles = 10
         for i in range(n_quantiles):
@@ -529,4 +529,4 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
         else:
             self.export_mesh_to_ply()
 
-        
+
