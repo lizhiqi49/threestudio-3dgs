@@ -38,7 +38,7 @@ class DynamicSuGaRModel(SuGaRModel):
         num_frames: int = 14
         static_learnable: bool = False
         use_spline: bool = True
-        
+
         use_deform_graph: bool = True
         n_dg_nodes: int = 1000
         dg_node_connectivity: int = 8
@@ -55,7 +55,6 @@ class DynamicSuGaRModel(SuGaRModel):
         d_rotation: bool = True
         d_opacity: bool = False
         d_gs_scale: bool = False
-
 
     cfg: Config
 
@@ -76,7 +75,7 @@ class DynamicSuGaRModel(SuGaRModel):
 
         if self.cfg.use_spline:
             self.init_cubic_spliner()
-            
+
         if self.cfg.use_deform_graph:
             self.build_deformation_graph(self.cfg.n_dg_nodes, self.cfg.dg_node_connectivity)
 
@@ -104,7 +103,7 @@ class DynamicSuGaRModel(SuGaRModel):
             self._deformation_table = torch.empty(0)
         else:
             raise ValueError(f"Unimplemented dynamic mode {self.dynamic_mode}.")
-        
+
         self.training_setup_dynamic()
 
     def training_setup_dynamic(self):
@@ -180,29 +179,30 @@ class DynamicSuGaRModel(SuGaRModel):
                     ) * self.spatial_lr_scale
 
         self.color_clip = C(self.cfg.color_clip, 0, iteration)
-        
+
     def get_gs_xyz_from_vertices(self, xyz_vert=None) -> Float[Tensor, "N_t N_gs 3"]:
         if self.binded_to_surface_mesh:
             if xyz_vert is None:
                 xyz_vert = self._points
             # First gather vertices of all triangles
             if xyz_vert.ndim == 2:
-                xyz_vert = xyz_vert[None]   # (n_t, n_v, 3)
+                xyz_vert = xyz_vert[None]  # (n_t, n_v, 3)
             faces_verts = xyz_vert[:, self._surface_mesh_faces]  # (n_t, n_faces, 3, 3)
-            
+
             # Then compute the points using barycenter coordinates in the surface triangles
-            points = faces_verts[:, :, None] * self.surface_triangle_bary_coords[None, None]  # n_t, n_faces, n_gaussians_per_face, 3, n_coords
+            points = faces_verts[:, :, None] * self.surface_triangle_bary_coords[
+                None, None]  # n_t, n_faces, n_gaussians_per_face, 3, n_coords
             points = points.sum(dim=-2)  # n_t, n_faces, n_gaussians_per_face, n_coords
             # points = points.reshape(self._n_points, 3)
             points = rearrange(points, "t f n c -> t (f n) c")
         else:
             raise ValueError("No vertices when with no mesh binded.")
         return points
-    
+
     def get_timed_xyz_vertices(
-        self, 
-        timestamp: Float[Tensor, "N_t"] = None, 
-        frame_idx: Int[Tensor, "N_t"] = None, 
+        self,
+        timestamp: Float[Tensor, "N_t"] = None,
+        frame_idx: Int[Tensor, "N_t"] = None,
         no_spline: bool = False
     ) -> Float[Tensor, "N_t N_v 3"]:
         if timestamp is not None:
@@ -211,7 +211,7 @@ class DynamicSuGaRModel(SuGaRModel):
         if frame_idx is not None:
             if frame_idx.ndim == 0:
                 frame_idx = frame_idx.unsqueeze(-1)
-            
+
         xyz_v = self._points.unsqueeze(0)
         if not no_spline and self.cfg.use_spline:
             if self.cfg.use_deform_graph:
@@ -231,7 +231,7 @@ class DynamicSuGaRModel(SuGaRModel):
                 xyz_v_timed = self._deformation.forward_dynamic_xyz(pts_inp, time_inp)
                 xyz_v_timed = xyz_v_timed.reshape(timestamp.shape[-1], self._points.shape[0], 3)
         return xyz_v_timed
-    
+
     def get_timed_xyz_gs(self, timestamp=None, frame_idx=None) -> Float[Tensor, "N_t N_gs 3"]:
         if self.binded_to_surface_mesh:
             xyz_vert_timed = self.get_timed_xyz_vertices(timestamp, frame_idx)
@@ -239,7 +239,7 @@ class DynamicSuGaRModel(SuGaRModel):
         else:
             raise NotImplementedError
         return xyz_gs_timed
-    
+
     def get_timed_all(self, timestamp=None, frame_idx=None):
         means3D = self.get_timed_xyz_gs(timestamp, frame_idx)[0]
         scales = self.get_scaling
@@ -247,10 +247,10 @@ class DynamicSuGaRModel(SuGaRModel):
         opacity = self.get_opacity
         colors_precomp = self.get_points_rgb()
         return means3D, scales, rotations, opacity, colors_precomp
-    
+
     def get_timed_dg_trans_rotation(
-        self, 
-        timestamp: Float[Tensor, "N_t"] = None, 
+        self,
+        timestamp: Float[Tensor, "N_t"] = None,
         frame_idx: Int[Tensor, "N_t"] = None
     ):
         if self.dynamic_mode == "discrete":
@@ -265,17 +265,17 @@ class DynamicSuGaRModel(SuGaRModel):
             num_t = timestamp.shape[0]
             pts = torch.cat([pts] * num_t, dim=0)
             ts = timestamp.unsqueeze(-1).repeat_interleave(num_pts, dim=0)
-            trans, rot = self._deformation.forward_dg_trans_and_rotation(pts, ts*2-1)
+            trans, rot = self._deformation.forward_dg_trans_and_rotation(pts, ts * 2 - 1)
             trans = trans.reshape(num_t, num_pts, 3)
             rot = rot.reshape(num_t, num_pts, 4)
             idt_quaternion = torch.zeros((1, num_pts, 4)).to(rot)
             idt_quaternion[..., -1] = 1
             rot = rot + idt_quaternion
         return trans, rot
-    
+
     def get_timed_surface_mesh(
-        self, 
-        timestamp: Float[Tensor, "N_t"] = None, 
+        self,
+        timestamp: Float[Tensor, "N_t"] = None,
         frame_idx: Int[Tensor, "N_t"] = None
     ) -> Meshes:
         n_t = len(timestamp) if timestamp is not None else len(frame_idx)
@@ -287,33 +287,33 @@ class DynamicSuGaRModel(SuGaRModel):
             )
         )
         return surface_mesh
-    
+
     def get_timed_face_normals(
-        self, 
-        timestamp: Float[Tensor, "N_t"] = None, 
+        self,
+        timestamp: Float[Tensor, "N_t"] = None,
         frame_idx: Int[Tensor, "N_t"] = None
     ) -> Float[Tensor, "N_t N_faces 3"]:
         return F.normalize(
-            self.get_timed_surface_mesh(timestamp, frame_idx).faces_normals_padded(), 
+            self.get_timed_surface_mesh(timestamp, frame_idx).faces_normals_padded(),
             dim=-1
         )
-    
+
     def get_timed_gs_normals(
-        self, 
-        timestamp: Float[Tensor, "N_t"] = None, 
+        self,
+        timestamp: Float[Tensor, "N_t"] = None,
         frame_idx: Int[Tensor, "N_t"] = None
     ) -> Float[Tensor, "N_t N_gs 3"]:
         return self.get_timed_face_normals(timestamp, frame_idx).repeat_interleave(
             self.cfg.n_gaussians_per_surface_triangle, dim=1
         )
-    
+
     def init_cubic_spliner(self):
         n_ctrl_knots = self.num_frames
-        t_interv = torch.as_tensor(1 / (n_ctrl_knots - 3)).cuda()   # exclude start and end point
+        t_interv = torch.as_tensor(1 / (n_ctrl_knots - 3)).cuda()  # exclude start and end point
         spline_cfg = SplineConfig(
-            degree=3, 
+            degree=3,
             sampling_interval=t_interv,
-            start_time=-t_interv, 
+            start_time=-t_interv,
             n_knots=self.num_frames
         )
         self.spliner = Spline(spline_cfg)
@@ -334,11 +334,11 @@ class DynamicSuGaRModel(SuGaRModel):
             )
             ctrl_knots_xyz = []
             for i, t in enumerate(ticks):
-                xyz = self.get_timed_xyz_vertices(t, i, no_spline=True)
+                xyz = self.get_timed_xyz_vertices(t, torch.tensor(i), no_spline=True)
                 ctrl_knots_xyz.append(xyz)
-            ctrl_knots_xyz = torch.stack(ctrl_knots_xyz, dim=0)
+            ctrl_knots_xyz = torch.concat(ctrl_knots_xyz)
             self.spliner.set_data("xyz", ctrl_knots_xyz.permute(1, 0, 2))
-        
+
     def compute_control_knots_dg(self):
         ticks = torch.as_tensor(
             np.linspace(
@@ -359,16 +359,16 @@ class DynamicSuGaRModel(SuGaRModel):
 
     def spline_interp_xyz(self, timestamp: Float[Tensor, "N_t"]):
         return self.spliner(timestamp, keys=["xyz"])["xyz"]
-    
+
     def spline_interp_dg(self, timestamp: Float[Tensor, "N_t"]) -> Tuple[Tensor, pp.LieTensor]:
         outs = self.spliner(timestamp)
         return outs["xyz"], outs["rotation"]
-    
+
     def build_deformation_graph(self, n_nodes, nodes_connectivity=6):
         device = self.device
         xyz_verts = self.get_xyz_verts
         self._xyz_cpu = xyz_verts.cpu().numpy()
-        
+
         mesh = o3d.io.read_triangle_mesh(self.cfg.surface_mesh_to_bind_path)
         downpcd = mesh.sample_points_uniformly(number_of_points=n_nodes)
         # downpcd = mesh.sample_points_poisson_disk(number_of_points=1000, pcl=downpcd)
@@ -384,7 +384,7 @@ class DynamicSuGaRModel(SuGaRModel):
                 np.asarray(
                     downpcd_tree.search_knn_vector_3d(downpcd.points[i], nodes_connectivity + 1)[1][1:]
                 )
-            ).to(device) 
+            ).to(device)
             for i in range(downpcd_size)
         ]
 
@@ -395,13 +395,13 @@ class DynamicSuGaRModel(SuGaRModel):
         xyz_neighbor_node_idx = [
             torch.from_numpy(
                 np.asarray(downpcd_tree.search_knn_vector_3d(self._xyz_cpu[i], nodes_connectivity)[1])
-            ).to(device) 
+            ).to(device)
             for i in range(self._xyz_cpu.shape[0])
         ]
         xyz_neighbor_nodes_weights = [
             torch.from_numpy(
                 np.asarray(downpcd_tree.search_knn_vector_3d(self._xyz_cpu[i], nodes_connectivity)[2])
-            ).float().to(device) 
+            ).float().to(device)
             for i in range(self._xyz_cpu.shape[0])
         ]
 
@@ -410,12 +410,12 @@ class DynamicSuGaRModel(SuGaRModel):
         self._xyz_neighbor_nodes_weights = torch.sqrt(self._xyz_neighbor_nodes_weights)
         # xyz_neighbor_nodes_weights = torch.sqrt(torch.tensor(xyz_neighbor_nodes_weights))
         self._xyz_neighbor_nodes_weights = (
-            self._xyz_neighbor_nodes_weights 
+            self._xyz_neighbor_nodes_weights
             / self._xyz_neighbor_nodes_weights.sum(dim=1, keepdim=True)
         )
-    
+
     def deform(
-        self, 
+        self,
         timestamp: Float[Tensor, "N_t"] = None,
         frame_idx: Int[Tensor, "N_t"] = None
     ) -> Float[Tensor, "N_t N_p 3"]:
@@ -450,10 +450,6 @@ class DynamicSuGaRModel(SuGaRModel):
         deformed_xyz = (nn_weights * deformed_xyz).sum(dim=2)
 
         return deformed_xyz
-    
 
-        
     # def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
     #     super().update_step(epoch, global_step, on_load_weights)
-
-        

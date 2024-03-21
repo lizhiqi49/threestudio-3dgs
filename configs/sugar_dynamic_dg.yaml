@@ -6,8 +6,9 @@ seed: 0
 data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   video_frames_dir: ./load/animate-anyone-demo-vid
-  video_length: 68
+  video_length: 25
   norm_timestamp: true
+  # num of frames a batch
   num_frames: 10
   height: [256, 512]
   width: [256, 512]
@@ -46,14 +47,16 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
 system_type: "sugar-4dgen-system"
 system:
   stage: motion
+  # num of frames between two adjacent timestamps for 2d diffusion guidance
   num_inter_frames: 10
   length_inter_frames: 0.1
 
   geometry_type: "dynamic-sugar"
   geometry:
-    num_frames: 50
+    # num of control knots per points(vertices/deformation nodes)
+    num_frames: 25
     use_spline: true
-    use_deform_graph: true
+    use_deform_graph: false
 
     n_dg_nodes: 1000
     dg_node_connectivity: 16
@@ -114,7 +117,7 @@ system:
     front_threshold: 30.
     back_threshold: 30.
 
-  guidance_2d_type: "stable-diffusion-lora-guidance"
+  guidance_2d_type: null
   guidance_2d:
     pretrained_model_name_or_path: "/home/lzq/workspace/huggingface_models/stabilityai--stable-diffusion-2-1-base"
     pretrained_adapter_name_or_path: /home/lzq/workspace/CVGL-4DGen-Project/outputs/anya_lora

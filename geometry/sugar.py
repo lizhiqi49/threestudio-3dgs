@@ -59,12 +59,12 @@ class SuGaRModel(BaseGeometry):
         spatial_lr_scale: float = 10.
         spatial_extent: float = 3.5
         color_clip: Any = 2.0
-        
+
         gs_color_inherit_vertices: bool = True
         init_gs_opacity: float = 0.5
 
         geometry_convert_from: str = ""
-        
+
         # For texture mesh extraction
         square_size_in_texture: int = 10
 
@@ -97,8 +97,8 @@ class SuGaRModel(BaseGeometry):
         # Texture attributes
         self._texture_initialized = False
         self.verts_uv, self.faces_uv = None, None
-        
-        
+
+
         if self.binded_to_surface_mesh and not self.learn_opacities:
             all_densities = inverse_sigmoid(
                 0.9999 * torch.ones((self.n_points, 1), dtype=torch.float, device=self.device)
@@ -114,7 +114,7 @@ class SuGaRModel(BaseGeometry):
         if self.cfg.beta_mode == "learnable":
             self._log_beta = torch.empty(0)
 
-        
+
         self.initialize_learnable_radiuses()
         # self.update_texture_features()
         self.training_setup()
@@ -133,10 +133,10 @@ class SuGaRModel(BaseGeometry):
             for j in range(3):
                 new_faces[i, j] = mapping_old2new[faces[i, j]]
         return new_verts, new_faces, new_vert_colors
-        
+
     def create_from_3dgs(self):
         ...
-    
+
 
     def load_surface_mesh_to_bind(self, mesh=None):
         self.binded_to_surface_mesh = True
@@ -177,16 +177,18 @@ class SuGaRModel(BaseGeometry):
 
         threestudio.info("Binding radiance cloud to surface mesh...")
         self.set_surface_triangle_bary_coords(self.cfg.n_gaussians_per_surface_triangle)
+        # points refer to mesh vertices in sugar
         self._points = nn.Parameter(
             torch.as_tensor(
                 verts, dtype=torch.float32, device=self.device
             ).requires_grad_(self.learn_positions)
         )
+        # n_points refer to num of gaussians
         self._n_points = len(faces) * self.cfg.n_gaussians_per_surface_triangle
         self._vertex_colors = torch.as_tensor(
             vert_colors, dtype=torch.float32, device=self.device
         )
-        
+
         if self.cfg.gs_color_inherit_vertices:
             faces_colors = self._vertex_colors[self._surface_mesh_faces]  # n_faces, 3, n_coords
             colors = faces_colors[:, None] * self.surface_triangle_bary_coords[None]  # n_faces, n_gaussians_per_face, 3, n_colors
@@ -200,7 +202,7 @@ class SuGaRModel(BaseGeometry):
                 0.5 * torch.ones(self._n_points, 1, 3)
             )
         self._sh_coordinates_dc = nn.Parameter(
-            sh_coordinates_dc.to(self.device, dtype=torch.float32), 
+            sh_coordinates_dc.to(self.device, dtype=torch.float32),
             requires_grad=(not self.cfg.freeze_gaussians)
         )
         self._sh_coordinates_rest = nn.Parameter(
@@ -217,7 +219,7 @@ class SuGaRModel(BaseGeometry):
                     dtype=torch.float32,
                     device=self.device,
                 )[..., None]
-            
+
         if n_gaussians_per_surface_triangle == 3:
             self.surface_triangle_circle_radius = 1. / 2. / (np.sqrt(3.) + 1.)
             self.surface_triangle_bary_coords = torch.tensor(
@@ -227,7 +229,7 @@ class SuGaRModel(BaseGeometry):
                 dtype=torch.float32,
                 device=self.device,
             )[..., None]
-        
+
         if n_gaussians_per_surface_triangle == 4:
             self.surface_triangle_circle_radius = 1 / (4. * np.sqrt(3.))
             self.surface_triangle_bary_coords = torch.tensor(
@@ -238,7 +240,7 @@ class SuGaRModel(BaseGeometry):
                 dtype=torch.float32,
                 device=self.device,
             )[..., None]  # n_gaussians_per_face, 3, 1
-            
+
         if n_gaussians_per_surface_triangle == 6:
             self.surface_triangle_circle_radius = 1 / (4. + 2.*np.sqrt(3.))
             self.surface_triangle_bary_coords = torch.tensor(
@@ -254,11 +256,11 @@ class SuGaRModel(BaseGeometry):
 
     def prepare_primitive_polygon(self):
         self._diamond_verts = torch.Tensor(
-                [[0., -1., 0.], [0., 0, 1.], 
+                [[0., -1., 0.], [0., 0, 1.],
                 [0., 1., 0.], [0., 0., -1.]]
                 ).to(self.device)
         self._square_verts = torch.Tensor(
-                [[0., -1., 1.], [0., 1., 1.], 
+                [[0., -1., 1.], [0., 1., 1.],
                 [0., 1., -1.], [0., -1., -1.]]
                 ).to(self.device)
         if self.cfg.primitive_types == 'diamond':
@@ -281,7 +283,7 @@ class SuGaRModel(BaseGeometry):
         if self.binded_to_surface_mesh:
             # First gather vertices of all triangles
             faces_verts = self._points[self._surface_mesh_faces]  # n_faces, 3, n_coords
-            
+
             # Then, compute initial scales
             scales = (faces_verts - faces_verts[:, [1, 2, 0]]).norm(dim=-1).min(dim=-1)[0] * self.surface_triangle_circle_radius
             scales = scales.clamp_min(0.0000001).reshape(len(faces_verts), -1, 1).expand(-1, self.cfg.n_gaussians_per_surface_triangle, 2).clone().reshape(-1, 2)
@@ -289,7 +291,7 @@ class SuGaRModel(BaseGeometry):
                 self.scale_inverse_activation(scales),
                 requires_grad=self.learn_scales
             )
-            
+
             # We actually don't learn quaternions here, but complex numbers to encode a 2D rotation in the triangle's plane
             complex_numbers = torch.zeros(self._n_points, 2).to(self.device)
             complex_numbers[:, 0] = 1.
@@ -299,7 +301,7 @@ class SuGaRModel(BaseGeometry):
             )
         else:
             raise NotImplementedError
-        
+
     def training_setup(self):
         training_args = self.cfg
         self.spatial_lr_scale = self.cfg.spatial_lr_scale    # TODO: put it here for now
@@ -350,11 +352,11 @@ class SuGaRModel(BaseGeometry):
                 ]
         else:
             raise NotImplementedError
-        
+
         self.optimize_list = l
         self.optimize_params = [d["name"] for d in l]
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
-        
+
         self.color_clip = C(self.cfg.color_clip, 0, 0)
 
     def update_learning_rate(self, iteration):
@@ -376,7 +378,7 @@ class SuGaRModel(BaseGeometry):
                 ) / 20.0
 
         self.color_clip = C(self.cfg.color_clip, 0, iteration)
-    
+
     def merge_optimizer(self, net_optimizer):
         l = self.optimize_list
         for param in net_optimizer.param_groups:
@@ -388,28 +390,28 @@ class SuGaRModel(BaseGeometry):
             )
         self.optimizer = torch.optim.AdamW(l, lr=0.0, betas=[0.9, 0.99], eps=1.e-15)
         return self.optimizer
-                
+
     @property
     def n_points(self):
         if not self.binded_to_surface_mesh:
             return len(self._points)
         else:
             return self._n_points
-        
+
     @property
     def n_verts(self):
         if self.binded_to_surface_mesh:
             return len(self._points)
         else:
             raise ValueError("No verts when with no mesh binded!")
-    
+
     @property
     def n_faces(self):
         if self.binded_to_surface_mesh:
             return len(self._surface_mesh_faces)
         else:
             raise ValueError("No faces when with no mesh binded!")
-        
+
     @property
     def points(self):
         if not self.binded_to_surface_mesh:
@@ -420,11 +422,11 @@ class SuGaRModel(BaseGeometry):
         else:
             # First gather vertices of all triangles
             faces_verts = self._points[self._surface_mesh_faces]  # n_faces, 3, n_coords
-            
+
             # Then compute the points using barycenter coordinates in the surface triangles
             points = faces_verts[:, None] * self.surface_triangle_bary_coords[None]  # n_faces, n_gaussians_per_face, 3, n_coords
             points = points.sum(dim=-2)  # n_faces, n_gaussians_per_face, n_coords
-            
+
             return points.reshape(self._n_points, 3)  # n_faces * n_gaussians_per_face, n_coords
 
     @property
@@ -439,26 +441,26 @@ class SuGaRModel(BaseGeometry):
         if not self._texture_initialized:
             self.update_texture_features(self.cfg.square_size_in_texture)
         return self.sh_coordinates[self.point_idx_per_pixel]
-    
+
     @property
     def strengths(self):
         return torch.sigmoid(self.all_densities.view(-1, 1))
-    
+
     @property
     def radiuses(self):
         return torch.cat([self._quaternions, self._scales], dim=-1)[None]
-    
+
     @property
     def scaling(self):
         if not self.binded_to_surface_mesh:
             scales = self.scale_activation(self._scales)
         else:
             scales = torch.cat([
-                self.surface_mesh_thickness * torch.ones(len(self._scales), 1, device=self.device), 
+                self.surface_mesh_thickness * torch.ones(len(self._scales), 1, device=self.device),
                 self.scale_activation(self._scales)
                 ], dim=-1)
         return scales
-    
+
     @property
     def quaternions(self):
         if not self.binded_to_surface_mesh:
@@ -473,7 +475,7 @@ class SuGaRModel(BaseGeometry):
 
             # We use the cross product for the last base axis
             base_R_2 = torch.nn.functional.normalize(torch.cross(R_0, base_R_1, dim=-1))
-            
+
             # We now apply the learned 2D rotation to the base quaternion
             complex_numbers = torch.nn.functional.normalize(self._quaternions, dim=-1).view(len(self._surface_mesh_faces), self.cfg.n_gaussians_per_surface_triangle, 2)
             R_1 = complex_numbers[..., 0:1] * base_R_1[:, None] + complex_numbers[..., 1:2] * base_R_2[:, None]
@@ -485,17 +487,17 @@ class SuGaRModel(BaseGeometry):
                         R_2[..., None]],
                         dim=-1).view(-1, 3, 3)
             quaternions = matrix_to_quaternion(R)
-            
+
         return torch.nn.functional.normalize(quaternions, dim=-1)
-    
+
     @property
     def get_face_normals(self) -> Float[Tensor, "N_faces 3"]:
         return F.normalize(self.surface_mesh.faces_normals_list()[0], dim=-1)
-    
+
     @property
     def get_gs_normals(self) -> Float[Tensor, "N_gs 3"]:
         return self.get_face_normals.repeat_interleave(self.cfg.n_gaussians_per_surface_triangle, dim=0)
-    
+
     @property
     def get_features(self):
         return self.sh_coordinates
@@ -503,33 +505,33 @@ class SuGaRModel(BaseGeometry):
     @property
     def get_scaling(self):
         return self.scaling
-    
+
     @property
     def get_opacity(self):
         return self.strengths
-    
+
     @property
     def get_rotation(self):
         return self.quaternions
-    
+
     @property
     def get_xyz(self):
         return self.points
-    
+
     @property
     def get_xyz_verts(self):
         if self.binded_to_surface_mesh:
             return self._points
         else:
             raise ValueError
-        
+
     @property
     def get_faces(self):
         if self.binded_to_surface_mesh:
             return self._surface_mesh_faces
         else:
             raise ValueError
-    
+
     @property
     def _mesh(self):    # starts with "_" to avoid update texture features in update step
         textures_uv = TexturesUV(
@@ -538,24 +540,24 @@ class SuGaRModel(BaseGeometry):
             faces_uvs=self.faces_uv[None],
             sampling_mode='nearest',
             )
-        
+
         return Meshes(
-            verts=[self.triangle_vertices],   
+            verts=[self.triangle_vertices],
             faces=[self.triangles],
             textures=textures_uv,
         )
-    
+
     @property
     def surface_mesh(self):
         # Create a Meshes object
         surface_mesh = Meshes(
-            verts=[self._points.to(self.device)],   
+            verts=[self._points.to(self.device)],
             faces=[self._surface_mesh_faces.to(self.device)],
             textures=TexturesVertex(verts_features=self._vertex_colors[None].clamp(0, 1).to(self.device)),
             # verts_normals=[verts_normals.to(rc.device)],
         )
         return surface_mesh
-    
+
     def get_covariance(self, return_full_matrix=False, return_sqrt=False, inverse_scales=False):
         scaling = self.scaling
         if inverse_scales:
@@ -577,11 +579,11 @@ class SuGaRModel(BaseGeometry):
         cov3D[:, 5] = cov3Dmatrix[:, 2, 2]
 
         return cov3D
-    
+
     def update_texture_features(self, square_size_in_texture=2):
         features = self.sh_coordinates.view(len(self.points), -1)
         faces_uv, verts_uv, texture_img, point_idx_per_pixel = _convert_vertex_colors_to_texture(
-            self, 
+            self,
             features,
             square_size=square_size_in_texture,
             )
@@ -600,8 +602,8 @@ class SuGaRModel(BaseGeometry):
             self.knn_to_track = knn_to_track
         else:
             if knn_to_track is None:
-                knn_to_track = self.knn_to_track 
-        # Compute KNN               
+                knn_to_track = self.knn_to_track
+        # Compute KNN
         with torch.no_grad():
             self.knn_to_track = knn_to_track
             knns = knn_points(self.points[None], self.points[None], K=knn_to_track)
@@ -622,15 +624,15 @@ class SuGaRModel(BaseGeometry):
                 render_directions = F.normalize(positions - camera_centers, dim=-1)
             else:
                 raise ValueError("camera_centers must be provided.")
-            
+
             sh_coordinates = self.sh_coordinates[:, :sh_levels**2]
 
             shs_view = sh_coordinates.transpose(-1, -2).view(-1, 3, sh_levels**2)
             sh2rgb = eval_sh(sh_levels-1, shs_view, render_directions)
             colors = torch.clamp_min(sh2rgb + 0.5, 0.0).view(-1, 3)
-            
-        return colors  
-    
+
+        return colors
+
     """surface levels computation functions, not used"""
     def compute_surface_levels_point_clouds(self):
         ...
@@ -644,17 +646,17 @@ class SuGaRModel(BaseGeometry):
 
 
 def _convert_vertex_colors_to_texture(
-    rc: SuGaRModel, 
+    rc: SuGaRModel,
     colors: torch.Tensor,
     square_size: int=4,
 ):
     points_to_mesh = rc.points
-    
+
     n_square_per_axis = int(np.sqrt(len(points_to_mesh)) + 1)
     texture_size = square_size * n_square_per_axis
-    
+
     n_features = colors.shape[-1]
-    
+
     point_idx_per_pixel = torch.zeros(texture_size, texture_size, device=rc.device).int()
 
     with torch.no_grad():
@@ -666,7 +668,7 @@ def _convert_vertex_colors_to_texture(
 
         # Build verts UVs
         verts_coords = torch.cartesian_prod(
-            torch.arange(n_square_per_axis, device=rc.device), 
+            torch.arange(n_square_per_axis, device=rc.device),
             torch.arange(n_square_per_axis, device=rc.device)
             )[:, None] * square_size
         verts_uv = torch.Tensor(
@@ -675,7 +677,7 @@ def _convert_vertex_colors_to_texture(
         verts_uv = verts_uv.view(-1, 2).long()[:4*len(points_to_mesh)] / texture_size
 
         # Build texture image
-        texture_img = torch.zeros(texture_size, texture_size, n_features, device=rc.device)    
+        texture_img = torch.zeros(texture_size, texture_size, n_features, device=rc.device)
         n_squares_filled = 0
         for i in range(n_square_per_axis):
             for j in range(n_square_per_axis):
@@ -683,20 +685,20 @@ def _convert_vertex_colors_to_texture(
                     break
                 start_idx_i = i * square_size
                 start_idx_j = j * square_size
-                texture_img[..., 
-                            start_idx_i:start_idx_i + square_size, 
+                texture_img[...,
+                            start_idx_i:start_idx_i + square_size,
                             start_idx_j:start_idx_j + square_size, :] = colors[i*n_square_per_axis + j].unsqueeze(0).unsqueeze(0)
                 point_idx_per_pixel[...,
-                                    start_idx_i:start_idx_i + square_size, 
+                                    start_idx_i:start_idx_i + square_size,
                                     start_idx_j:start_idx_j + square_size] = i*n_square_per_axis + j
                 n_squares_filled += 1
-                
+
         texture_img = texture_img.transpose(0, 1)
         texture_img = texture_img.flip(0)
-        
+
         point_idx_per_pixel = point_idx_per_pixel.transpose(0, 1)
         point_idx_per_pixel = point_idx_per_pixel.flip(0)
-    
+
     return faces_uv, verts_uv, texture_img, point_idx_per_pixel
 
 
@@ -729,7 +731,7 @@ C4 = [
     0.47308734787878004,
     -1.7701307697799304,
     0.6258357354491761,
-]   
+]
 
 
 def eval_sh(deg, sh, dirs):
@@ -797,10 +799,10 @@ from pytorch3d.renderer.cameras import _get_sfm_calibration_matrix
 class GSCamera(torch.nn.Module):
     """Class to store Gaussian Splatting camera parameters.
     """
-    def __init__(self, R, T, FoVx, FoVy, 
+    def __init__(self, R, T, FoVx, FoVy,
                  image_height, image_width,
-                 trans=np.array([0.0, 0.0, 0.0]), 
-                 scale=1.0, 
+                 trans=np.array([0.0, 0.0, 0.0]),
+                 scale=1.0,
                  data_device = "cuda",
                  ):
         """
@@ -850,18 +852,18 @@ class GSCamera(torch.nn.Module):
         self.projection_matrix = getProjectionMatrix(znear=self.znear, zfar=self.zfar, fovX=self.FoVx, fovY=self.FoVy).transpose(0,1).cuda()
         self.full_proj_transform = (self.world_view_transform.unsqueeze(0).bmm(self.projection_matrix.unsqueeze(0))).squeeze(0)
         self.camera_center = self.world_view_transform.inverse()[3, :3]
-        
+
     @property
     def device(self):
         return self.world_view_transform.device
-    
+
     def to(self, device):
         self.world_view_transform = self.world_view_transform.to(device)
         self.projection_matrix = self.projection_matrix.to(device)
         self.full_proj_transform = self.full_proj_transform.to(device)
         self.camera_center = self.camera_center.to(device)
         return self
-    
+
 def convert_camera_from_gs_to_pytorch3d(gs_cameras, device='cuda'):
     """
     From Gaussian Splatting camera parameters,
@@ -874,9 +876,9 @@ def convert_camera_from_gs_to_pytorch3d(gs_cameras, device='cuda'):
     Returns:
         p3d_cameras: pytorch3d-compatible camera object.
     """
-    
+
     N = len(gs_cameras)
-    
+
     R = torch.Tensor(np.array([gs_camera.R for gs_camera in gs_cameras])).to(device)
     T = torch.Tensor(np.array([gs_camera.T for gs_camera in gs_cameras])).to(device)
     fx = torch.Tensor(np.array([fov2focal(gs_camera.FoVx, gs_camera.image_width) for gs_camera in gs_cameras])).to(device)
@@ -885,16 +887,16 @@ def convert_camera_from_gs_to_pytorch3d(gs_cameras, device='cuda'):
     image_width = torch.tensor(np.array([gs_camera.image_width for gs_camera in gs_cameras]), dtype=torch.int).to(device)
     cx = image_width / 2.  # torch.zeros_like(fx).to(device)
     cy = image_height / 2.  # torch.zeros_like(fy).to(device)
-    
+
     w2c = torch.zeros(N, 4, 4).to(device)
     w2c[:, :3, :3] = R.transpose(-1, -2)
     w2c[:, :3, 3] = T
     w2c[:, 3, 3] = 1
-    
+
     c2w = w2c.inverse()
     c2w[:, :3, 1:3] *= -1
     c2w = c2w[:, :3, :]
-    
+
     distortion_params = torch.zeros(N, 6).to(device)
     camera_type = torch.ones(N, 1, dtype=torch.int32).to(device)
 
