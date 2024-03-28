@@ -22,7 +22,7 @@ class ParamGroup:
                 shorthand = True
                 key = key[1:]
             t = type(value)
-            value = value if not fill_none else None 
+            value = value if not fill_none else None
             if shorthand:
                 if t == bool:
                     group.add_argument("--" + key, ("-" + key[0:1]), default=value, action="store_true")
@@ -171,7 +171,7 @@ def interpolate_ms_features(pts: torch.Tensor,
 class HexPlaneField(nn.Module):
     def __init__(
         self,
-        
+
         bounds,
         planeconfig,
         multires
@@ -260,12 +260,12 @@ class Feat_Res_Net(nn.Module):
         super(Feat_Res_Net, self).__init__()
         self.D = D
         self.W = W
-    
+
         self.feature_out = [Linear_Res(self.W)]
         for i in range(self.D-2):
             self.feature_out.append(Linear_Res(self.W))
         self.feature_out = nn.Sequential(*self.feature_out)
-    
+
     def initialize_weights(self,):
         for m in self.feature_out.modules():
             if isinstance(m, nn.Linear):
@@ -288,7 +288,7 @@ class Head_Res_Net(nn.Module):
         self.feature_out = [Linear_Res(self.W)]
         self.feature_out.append(nn.Linear(W, self.H))
         self.feature_out = nn.Sequential(*self.feature_out)
-    
+
     def initialize_weights(self,):
         for m in self.feature_out.modules():
             if isinstance(m, nn.Linear):
@@ -321,15 +321,15 @@ class Deformation(nn.Module):
         else:
             self.pos_deform, self.scales_deform, self.rotations_deform, self.opacity_deform = self.create_res_net()
         self.args = args
-    
+
     def create_net(self):
-        
+
         mlp_out_dim = 0
         if self.no_grid:
             self.feature_out = [nn.Linear(4,self.W)]
         else:
             self.feature_out = [nn.Linear(mlp_out_dim + self.grid.feat_dim ,self.W)]
-        
+
         for i in range(self.D-1):
             self.feature_out.append(nn.ReLU())
             self.feature_out.append(nn.Linear(self.W,self.W))
@@ -340,16 +340,16 @@ class Deformation(nn.Module):
             nn.Sequential(nn.ReLU(),nn.Linear(self.W,self.W),nn.ReLU(),nn.Linear(self.W, 3)),\
             nn.Sequential(nn.ReLU(),nn.Linear(self.W,self.W),nn.ReLU(),nn.Linear(self.W, 4)), \
             nn.Sequential(nn.ReLU(),nn.Linear(self.W,self.W),nn.ReLU(),nn.Linear(self.W, 1))
-    
+
     def create_res_net(self,):
-        
+
         mlp_out_dim = 0
 
         if self.no_grid:
             self.feature_out = [nn.Linear(4,self.W)]
         else:
             self.feature_out = [nn.Linear(mlp_out_dim + self.grid.feat_dim ,self.W)]
-        
+
         for i in range(self.D-1):
             self.feature_out.append(nn.ReLU())
             self.feature_out.append(nn.Linear(self.W,self.W))
@@ -363,11 +363,10 @@ class Deformation(nn.Module):
             Head_Res_Net(self.W, 3), \
             Head_Res_Net(self.W, 3), \
             Head_Res_Net(self.W, 4), \
-            Head_Res_Net(self.W, 1) 
+            Head_Res_Net(self.W, 1)
 
-    
+
     def query_time(self, rays_pts_emb, scales_emb, rotations_emb, time_emb):
-
         if not self.use_res:
             if self.no_grid:
                 h = torch.cat([rays_pts_emb[:,:3],time_emb[:,:1]],-1)
@@ -375,7 +374,7 @@ class Deformation(nn.Module):
                 grid_feature = self.grid(rays_pts_emb[:,:3], time_emb[:,:1])
 
                 h = grid_feature
-            
+
             h = self.feature_out(h)
         else:
             grid_feature = self.grid(rays_pts_emb[:,:3], time_emb[:,:1])
@@ -409,21 +408,21 @@ class Deformation(nn.Module):
             dr = self.rotations_deform(hidden)
             rotations = rotations_emb[:,:4] + dr
         if self.args.no_do: # True
-            opacity = opacity_emb[:,:1] 
+            opacity = opacity_emb[:,:1]
         else:
-            do = self.opacity_deform(hidden) 
+            do = self.opacity_deform(hidden)
             opacity = opacity_emb[:,:1] + do
         # + do
         # print("deformation value:","pts:",torch.abs(dx).mean(),"rotation:",torch.abs(dr).mean())
 
         return pts, scales, rotations, opacity
-    
+
     def forward_dynamic_xyz(self, rays_pts_emb, time_emb):
         hidden = self.query_time(rays_pts_emb, None, None, time_emb).float()
         dx = self.pos_deform(hidden)
         pts = rays_pts_emb[:, :3] + dx
         return pts
-    
+
     def forward_dynamic_xyz_and_rotation(self, rays_pts_emb, time_emb):
         hidden = self.query_time(rays_pts_emb, None, None, time_emb).float()
         dx = self.pos_deform(hidden)
@@ -439,7 +438,7 @@ class Deformation(nn.Module):
                 parameter_list.append(param)
         return parameter_list
     def get_grid_parameters(self):
-        return list(self.grid.parameters() ) 
+        return list(self.grid.parameters() )
     # + list(self.timegrid.parameters())
 
 
@@ -456,11 +455,11 @@ class DeformationNetwork(nn.Module):
         timenet_output = args.timenet_output
         times_ch = 2*timebase_pe+1
         self.timenet = nn.Sequential(
-            nn.Linear(times_ch, timenet_width), 
+            nn.Linear(times_ch, timenet_width),
             nn.ReLU(),
             nn.Linear(timenet_width, timenet_output)
         )
-        
+
         self.use_res = args.use_res
         if self.use_res:
             print("Using zero-init and residual")
@@ -487,7 +486,7 @@ class DeformationNetwork(nn.Module):
         else:
             return self.forward_static(point)
 
-        
+
     def forward_static(self, points):
         points = self.deformation_net(points)
         return points
@@ -503,10 +502,10 @@ class DeformationNetwork(nn.Module):
         return means3D, scales, rotations, opacity
     def forward_dynamic_xyz(self, point, times_sel):
         return self.deformation_net.forward_dynamic_xyz(point, times_sel)
-    
+
     def forward_dg_trans_and_rotation(self, point, times_sel):
         return self.deformation_net.forward_dynamic_xyz_and_rotation(point, times_sel)
-    
+
     def get_mlp_parameters(self):
         return self.deformation_net.get_mlp_parameters() + list(self.timenet.parameters())
     def get_grid_parameters(self):
@@ -518,6 +517,7 @@ def initialize_weights(m):
         # init.constant_(m.weight, 0)
         init.xavier_uniform_(m.weight,gain=1)
         if m.bias is not None:
+            # ? bug with initialize weight again
             init.xavier_uniform_(m.weight,gain=1)
             # init.xavier_uniform_(m.bias,gain=1)
             # init.constant_(m.bias, 0)

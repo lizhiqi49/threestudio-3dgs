@@ -56,17 +56,18 @@ system:
     # num of control knots per points(vertices/deformation nodes)
     num_frames: 25
     use_spline: true
-    use_deform_graph: false
+    use_deform_graph: true
 
     n_dg_nodes: 1000
     dg_node_connectivity: 16
+    # for discrete dynamic mode
     dg_trans_lr: 0.001
     dg_rot_lr: 0.001
-
-    dynamic_mode: discrete
     delta_xyz_lr: 0.001
-    # delta_rot_lr: 0.0001
 
+    dynamic_mode: deformation # (deformation / discrete)
+
+    # for deformation dynamic mode
     deformation_lr: 0.00064
     grid_lr: 0.0064
     spatial_extent: ${data.default_camera_distance}

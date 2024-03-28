@@ -11,13 +11,13 @@ try:
 except ImportError:
 	print("torch_batch_svd not installed. Using torch.svd instead")
 	batch_svd = torch.svd
-	
+
 
 class ARAPCoach:
-	
+
     def __init__(
-        self, 
-        verts: Float[Tensor, "N_verts 3"], 
+        self,
+        verts: Float[Tensor, "N_verts 3"],
         faces: Int[ndarray, "N_face 3"],
         device: torch.device
     ):
@@ -42,7 +42,7 @@ class ARAPCoach:
                 mapping[f[j]].add(f[k])
         orn = {k: list(v) for k, v in mapping.items()}  # convert to list
         return orn
-    
+
     def get_indices(self):
         # Produce indices
         ii = []
@@ -59,11 +59,11 @@ class ARAPCoach:
         jj = torch.LongTensor(jj).to(self.device)
         nn = torch.LongTensor(nn).to(self.device)
         return ii, jj, nn
-    
+
     @torch.no_grad()
     def produce_cot_weights_nfmt(self, xyz_verts=None, sparse: bool = True):
         """Compute cotangent weights for every one-ring neighbors of each vert"""
-        
+
         # ======== compute a full size weight matrix first ======= #
         V, F = self.n_verts, self.n_faces
         verts = self.verts if xyz_verts is None else xyz_verts
@@ -94,7 +94,7 @@ class ARAPCoach:
         cotc = (A2 + B2 - C2) / area
         cot = torch.stack([cota, cotb, cotc], dim=1)
         cot /= 4.0
-        
+
         if sparse:
             ii = faces[:, [1, 2, 0]]
             jj = faces[:, [2, 0, 1]]
@@ -136,7 +136,7 @@ class ARAPCoach:
             Wn[ii, nn] = W[ii, jj]
 
         return Wn
-    
+
     def produce_edge_matrix_nfmt(self, xyz_verts: Float[Tensor, "N_verts 3"]):
         E = torch.zeros(self.n_verts, self.max_n_neighbors, 3).to(self.device)
         ii, jj, nn = self._indices_for_nfmt
@@ -144,7 +144,7 @@ class ARAPCoach:
         return E
 
     def compute_arap_energy(
-        self, 
+        self,
         xyz: Float[Tensor, "N_verts 3"],
         xyz_prime: Float[Tensor, "N_verts 3"],
         edge_weights: Float[Tensor, "N_verts N_max_neighbor"] = None,
@@ -184,7 +184,3 @@ class ARAPCoach:
         energy = (w * stretch_norm).sum()
 
         return energy
-
-        
-		
-    
