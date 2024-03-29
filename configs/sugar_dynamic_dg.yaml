@@ -6,7 +6,7 @@ seed: 0
 data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   video_frames_dir: ./load/animate-anyone-demo-vid
-  video_length: 25
+  video_length: 32
   norm_timestamp: true
   # num of frames a batch
   num_frames: 10
@@ -54,7 +54,7 @@ system:
   geometry_type: "dynamic-sugar"
   geometry:
     # num of control knots per points(vertices/deformation nodes)
-    num_frames: 25
+    num_frames: 32
     use_spline: true
     use_deform_graph: true
 
@@ -68,8 +68,12 @@ system:
     dynamic_mode: deformation # (deformation / discrete)
 
     # for deformation dynamic mode
-    deformation_lr: 0.00064
-    grid_lr: 0.0064
+    deformation_lr: 0.0008 # 0.0064
+    grid_lr: 0.0008 # 0.0064
+
+    # dynamic attr
+    d_gs_scale: true
+
     spatial_extent: ${data.default_camera_distance}
     spatial_lr_scale: 1
 
@@ -155,7 +159,7 @@ system:
     lambda_depth_rel: 0. # [0, 0, 0.05, 100]
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
-    lambda_normal_consistency: 10.
+    lambda_normal_consistency: 100. # 10.
     lambda_laplacian_smoothing: 0.
     lambda_3d_normal_smooth: 0.
     lambda_arap_reg: 0.01
@@ -163,7 +167,7 @@ system:
     # tv losses
     lambda_rgb_tv: 1.
     lambda_depth_tv: 1.
-    lambda_normal_tv: 1.
+    lambda_normal_tv: 10. # 1.
 
 
   optimizer:

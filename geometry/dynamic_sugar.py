@@ -99,6 +99,7 @@ class DynamicSuGaRModel(SuGaRModel):
             deformation_args.no_dr = not self.cfg.d_rotation
             deformation_args.no_ds = not self.cfg.d_gs_scale
             deformation_args.no_do = True
+
             self._deformation = DeformationNetwork(deformation_args)
             self._deformation_table = torch.empty(0)
         else:
@@ -223,6 +224,7 @@ class DynamicSuGaRModel(SuGaRModel):
                 if self.cfg.use_deform_graph:
                     xyz_v_timed = self.deform(timestamp, frame_idx)
                 else:
+                    assert frame_idx is not None
                     motion = self._delta_xyz[frame_idx]
                     xyz_v_timed = xyz_v + motion
             elif self.dynamic_mode == "deformation":
@@ -242,11 +244,91 @@ class DynamicSuGaRModel(SuGaRModel):
 
     def get_timed_all(self, timestamp=None, frame_idx=None):
         means3D = self.get_timed_xyz_gs(timestamp, frame_idx)[0]
-        scales = self.get_scaling
+
+        # common variables
+        no_spline = True
+        hidden = None
+        if (no_spline or not self.cfg.use_spline) and self.cfg.dynamic_mode == 'deformation':
+            hidden = self.get_deformation_hidden_gs(timestamp)
+
+        scales = self.get_timed_scales(timestamp, frame_idx, no_spline, hidden=hidden)
         rotations = self.get_rotation
         opacity = self.get_opacity
         colors_precomp = self.get_points_rgb()
         return means3D, scales, rotations, opacity, colors_precomp
+
+    def get_deformation_hidden_gs(self, timestamp):
+        assert timestamp is not None
+        if timestamp.ndim == 0:
+            timestamp = timestamp.unsqueeze(-1)
+        # get gs postion at timestamp 0
+        xyz_v = self._points.unsqueeze(0)
+        xyz_gs = self.get_gs_xyz_from_vertices(xyz_v)
+
+        # query hidden for deformation net
+        pts_inp = torch.cat([xyz_gs] * timestamp.shape[-1], dim=0).reshape(-1, 3)
+        time_inp = timestamp.unsqueeze(-1).repeat_interleave(pts_inp.shape[0], dim=0) * 2 - 1
+        hidden = self._deformation.deformation_net.query_time(pts_inp, None, None, time_inp)
+        return hidden
+
+    def get_timed_scales(
+        self,
+        timestamp: Float[Tensor, "N_t"] = None,
+        frame_idx: Int[Tensor, "N_t"] = None,
+        no_spline: bool = False,
+        **common_kwargs
+    ):
+        if not self.cfg.d_gs_scale:
+            return self.get_scaling
+        assert timestamp is not None
+        if timestamp.ndim == 0:
+            timestamp = timestamp.unsqueeze(-1)
+
+        scales = None
+
+        if not no_spline and self.cfg.use_spline:
+            raise NotImplementedError
+        else:
+            if self.dynamic_mode == "discrete":
+                raise NotImplementedError
+            elif self.dynamic_mode == "deformation":
+                assert 'hidden' in common_kwargs
+                hidden = common_kwargs['hidden']
+                ds = self._deformation.forward_dynamic_scale(None, None, hidden=hidden)
+                scales = self._scales + ds
+
+        return scales
+
+    def get_timed_no_dg_gs(
+        self,
+        timestamp: Float[Tensor, "N_t"] = None,
+        frame_idx: Int[Tensor, "N_t"] = None,
+        no_spline: bool = False
+    ):
+        # get other timed gaussian attributes(no deformation graph)
+        scales, rotations, opacity, colors_precomp = None, None, None, None
+
+        if timestamp is not None:
+            if timestamp.ndim == 0:
+                timestamp = timestamp.unsqueeze(-1)
+        if frame_idx is not None:
+            if frame_idx.ndim == 0:
+                frame_idx = frame_idx.unsqueeze(-1)
+
+        xyz_v = self._points.unsqueeze(0)
+        xyz_gs = self.get_gs_xyz_from_vertices(xyz_v)
+
+        if not no_spline and self.cfg.use_spline:
+            raise NotImplementedError
+        else:
+            if self.dynamic_mode == "discrete":
+                raise NotImplementedError
+            elif self.dynamic_mode == "deformation":
+                pts_inp = torch.cat([xyz_gs] * timestamp.shape[-1], dim=0).reshape(-1, 3)
+                time_inp = timestamp.unsqueeze(-1).repeat_interleave(xyz_gs.shape[0], dim=0) * 2 - 1
+
+                # add deformation forward function for scaling predict
+                # xyz_gs_timed = self._deformation.forward_dynamic_xyz(pts_inp, time_inp)
 
     def get_timed_dg_trans_rotation(
         self,
