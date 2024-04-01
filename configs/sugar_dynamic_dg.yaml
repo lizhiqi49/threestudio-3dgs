@@ -54,8 +54,8 @@ system:
   geometry_type: "dynamic-sugar"
   geometry:
     # num of control knots per points(vertices/deformation nodes)
-    num_frames: 32
-    use_spline: true
+    num_frames: 10
+    use_spline: false
     use_deform_graph: true
 
     n_dg_nodes: 1000
@@ -65,14 +65,14 @@ system:
     dg_rot_lr: 0.001
     delta_xyz_lr: 0.001
 
-    dynamic_mode: deformation # (deformation / discrete)
+    dynamic_mode: discrete # (deformation / discrete)
 
     # for deformation dynamic mode
     deformation_lr: 0.0008 # 0.0064
     grid_lr: 0.0008 # 0.0064
 
     # dynamic attr
-    d_gs_scale: true
+    d_gs_scale: false
 
     spatial_extent: ${data.default_camera_distance}
     spatial_lr_scale: 1

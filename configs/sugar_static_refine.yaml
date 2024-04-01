@@ -58,7 +58,7 @@ system:
 
     n_gaussians_per_surface_triangle: 6
     learnable_positions: true
-    surface_mesh_to_bind_path: "/cym/Project/CVGL-4DGen-Project/outputs/sugar-mesh/sugarmesh_vanilla3dgs_level0.3_decim200000_pd7.ply"
+    surface_mesh_to_bind_path: "outputs/sugar-mesh/smiling_corgi/sugarmesh_vanilla3dgs_level0.3_decim200000_pd7.ply"
 
     init_gs_opacity: 0.9
 

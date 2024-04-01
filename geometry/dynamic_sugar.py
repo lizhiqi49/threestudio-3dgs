@@ -80,6 +80,7 @@ class DynamicSuGaRModel(SuGaRModel):
             self.build_deformation_graph(self.cfg.n_dg_nodes, self.cfg.dg_node_connectivity)
 
         if self.dynamic_mode == "discrete":
+            # xyz
             if self.cfg.use_deform_graph:
                 self._dg_node_trans = nn.Parameter(
                     torch.zeros((self.num_frames, self.cfg.n_dg_nodes, 3), device="cuda"), requires_grad=True
@@ -93,6 +94,13 @@ class DynamicSuGaRModel(SuGaRModel):
                         self.num_frames, *self._points.shape, device=self.device
                     ).requires_grad_(True)
                 )
+
+            # scale
+            self._delta_scale = nn.Parameter(
+                torch.zeros(
+                    self.num_frames, *self.scaling.shape, device=self.device
+                )
+            )
 
         elif self.dynamic_mode == "deformation":
             deformation_args = ModelHiddenParams(None)
@@ -246,16 +254,20 @@ class DynamicSuGaRModel(SuGaRModel):
         means3D = self.get_timed_xyz_gs(timestamp, frame_idx)[0]
 
         # common variables
-        no_spline = True
-        hidden = None
-        if (no_spline or not self.cfg.use_spline) and self.cfg.dynamic_mode == 'deformation':
-            hidden = self.get_deformation_hidden_gs(timestamp)
+        common_kwargs = self.get_common_kwargs(timestamp, frame_idx)
 
-        scales = self.get_timed_scales(timestamp, frame_idx, no_spline, hidden=hidden)
+        scales = self.get_timed_scales(timestamp, frame_idx, **common_kwargs)
         rotations = self.get_rotation
         opacity = self.get_opacity
         colors_precomp = self.get_points_rgb()
         return means3D, scales, rotations, opacity, colors_precomp
+
+    def get_common_kwargs(self, timestamp=None, frame_idx=None):
+        no_spline = True
+        hidden = None
+        if (no_spline or not self.cfg.use_spline) and self.cfg.dynamic_mode == 'deformation':
+            hidden = self.get_deformation_hidden_gs(timestamp)
+        return {'no_spline': no_spline, 'hidden': hidden}
 
     def get_deformation_hidden_gs(self, timestamp):
         assert timestamp is not None
@@ -275,7 +287,6 @@ class DynamicSuGaRModel(SuGaRModel):
         self,
         timestamp: Float[Tensor, "N_t"] = None,
         frame_idx: Int[Tensor, "N_t"] = None,
-        no_spline: bool = False,
         **common_kwargs
     ):
         if not self.cfg.d_gs_scale:
@@ -283,8 +294,9 @@ class DynamicSuGaRModel(SuGaRModel):
         assert timestamp is not None
         if timestamp.ndim == 0:
             timestamp = timestamp.unsqueeze(-1)
-
         scales = None
+
+        no_spline = common_kwargs.get('no_spline')
 
         if not no_spline and self.cfg.use_spline:
             raise NotImplementedError
@@ -391,6 +403,8 @@ class DynamicSuGaRModel(SuGaRModel):
 
     def init_cubic_spliner(self):
         n_ctrl_knots = self.num_frames
+        # 32 points have 31 intervals, and 29 intervals for 0~1 time, 2 intervals for start_time~0 and 1~endtime(for interpolate first and last keyframes)
+        # So the control knots timestamps are different from keyframes
         t_interv = torch.as_tensor(1 / (n_ctrl_knots - 3)).cuda()  # exclude start and end point
         spline_cfg = SplineConfig(
             degree=3,
@@ -434,6 +448,9 @@ class DynamicSuGaRModel(SuGaRModel):
         )
         frame_idx = torch.arange(self.cfg.num_frames, dtype=torch.long, device=self.device)
         trans, rot = self.get_timed_dg_trans_rotation(ticks, frame_idx)
+
+
+
         node_ctrl_knots_trans = trans.permute(1, 0, 2)
         node_ctrl_knots_rots = pp.SO3(rot.permute(1, 0, 2))
         self.spliner.set_data("xyz", node_ctrl_knots_trans)
@@ -509,8 +526,10 @@ class DynamicSuGaRModel(SuGaRModel):
         if self.cfg.use_spline:
             dg_node_trans, dg_node_rots = self.spline_interp_dg(timestamp)
         else:
-            dg_node_trans = self._dg_node_trans[frame_idx]
-            dg_node_rots = pp.SO3(self._dg_node_rots[frame_idx])
+            raise NotImplementedError
+            # TODO fix problem here. The delta attr is designed for control knots num not for keyframe num
+            # dg_node_trans = self._dg_node_trans[frame_idx]
+            # dg_node_rots = pp.SO3(self._dg_node_rots[frame_idx])
 
         neighbor_nodes_trans: Float[Tensor, "N_t N_p N_n 3"]
         neighbor_nodes_rots: Float[Tensor, "N_t N_p N_n 3 3"]
