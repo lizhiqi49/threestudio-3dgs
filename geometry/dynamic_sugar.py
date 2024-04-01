@@ -47,6 +47,7 @@ class DynamicSuGaRModel(SuGaRModel):
 
         dynamic_mode: str = "discrete"  # 'discrete', 'deformation'
         delta_xyz_lr: Any = 0.001
+        delta_scales_lr: Any = 0.001
 
         deformation_lr: Any = 0.001
         grid_lr: Any = 0.001
@@ -96,11 +97,12 @@ class DynamicSuGaRModel(SuGaRModel):
                 )
 
             # scale
-            self._delta_scale = nn.Parameter(
-                torch.zeros(
-                    self.num_frames, *self.scaling.shape, device=self.device
+            if self.cfg.d_gs_scale:
+                self._delta_scales = nn.Parameter(
+                    torch.zeros(
+                        self.num_frames, *self._scales.shape, device=self.device
+                    )
                 )
-            )
 
         elif self.dynamic_mode == "deformation":
             deformation_args = ModelHiddenParams(None)
@@ -122,6 +124,7 @@ class DynamicSuGaRModel(SuGaRModel):
         if self.dynamic_mode == "discrete":
             if self.cfg.use_deform_graph:
                 l += [
+                    # xyz
                     {
                         "params": [self._dg_node_trans],
                         "lr": C(training_args.dg_trans_lr, 0, 0) * self.spatial_lr_scale,
@@ -139,6 +142,15 @@ class DynamicSuGaRModel(SuGaRModel):
                         "params": [self._delta_xyz],
                         "lr": C(training_args.delta_xyz_lr, 0, 0) * self.spatial_lr_scale,
                         "name": "delta_xyz",
+                    }
+                ]
+            # scales
+            if self.cfg.d_gs_scale:
+                l += [
+                    {
+                        "params": [self._delta_scales],
+                        "lr": C(training_args.delta_scales_lr, 0, 0) * self.spatial_lr_scale,
+                        "name": "delta_scales"
                     }
                 ]
         elif self.dynamic_mode == "deformation":
@@ -168,6 +180,10 @@ class DynamicSuGaRModel(SuGaRModel):
                 if param_group["name"] == "delta_xyz":
                     param_group["lr"] = C(
                         self.cfg.delta_xyz_lr, 0, iteration, interpolation="exp"
+                    ) * self.spatial_lr_scale
+                if param_group["name"] == "delta_scales":
+                    param_group["lr"] = C(
+                        self.cfg.delta_scales_lr, 0, iteration, interpolation="exp"
                     ) * self.spatial_lr_scale
                 if param_group["name"] == "dg_trans":
                     param_group["lr"] = C(
@@ -251,10 +267,10 @@ class DynamicSuGaRModel(SuGaRModel):
         return xyz_gs_timed
 
     def get_timed_all(self, timestamp=None, frame_idx=None):
-        means3D = self.get_timed_xyz_gs(timestamp, frame_idx)[0]
-
         # common variables
         common_kwargs = self.get_common_kwargs(timestamp, frame_idx)
+
+        means3D = self.get_timed_xyz_gs(timestamp, frame_idx)[0]
 
         scales = self.get_timed_scales(timestamp, frame_idx, **common_kwargs)
         rotations = self.get_rotation
@@ -263,7 +279,7 @@ class DynamicSuGaRModel(SuGaRModel):
         return means3D, scales, rotations, opacity, colors_precomp
 
     def get_common_kwargs(self, timestamp=None, frame_idx=None):
-        no_spline = True
+        no_spline = False
         hidden = None
         if (no_spline or not self.cfg.use_spline) and self.cfg.dynamic_mode == 'deformation':
             hidden = self.get_deformation_hidden_gs(timestamp)
@@ -299,13 +315,16 @@ class DynamicSuGaRModel(SuGaRModel):
         no_spline = common_kwargs.get('no_spline')
 
         if not no_spline and self.cfg.use_spline:
-            raise NotImplementedError
+            scales = self.spline_interp_scales(timestamp)
         else:
             if self.dynamic_mode == "discrete":
-                raise NotImplementedError
+                assert frame_idx is not None
+                delta_scale = self._delta_scales[frame_idx]
+                scales = self._scales + delta_scale
             elif self.dynamic_mode == "deformation":
-                assert 'hidden' in common_kwargs
-                hidden = common_kwargs['hidden']
+                hidden = common_kwargs.get('hidden')
+                if hidden is None:
+                    hidden = self.get_deformation_hidden_gs(timestamp)
                 ds = self._deformation.forward_dynamic_scale(None, None, hidden=hidden)
                 scales = self._scales + ds
 
@@ -415,25 +434,35 @@ class DynamicSuGaRModel(SuGaRModel):
         self.spliner = Spline(spline_cfg)
 
     def compute_control_knots(self):
+        ticks = torch.as_tensor(
+            np.linspace(
+                self.spliner.start_time.cpu().numpy(),
+                self.spliner.end_time.cpu().numpy(),
+                self.num_frames,
+                endpoint=True
+            ),
+            dtype=torch.float32,
+            device=self.device
+        )
+
         if self.cfg.use_deform_graph:
             self.compute_control_knots_dg()
         else:
-            ticks = torch.as_tensor(
-                np.linspace(
-                    self.spliner.start_time.cpu().numpy(),
-                    self.spliner.end_time.cpu().numpy(),
-                    self.num_frames,
-                    endpoint=True
-                ),
-                dtype=torch.float32,
-                device=self.device
-            )
             ctrl_knots_xyz = []
             for i, t in enumerate(ticks):
                 xyz = self.get_timed_xyz_vertices(t, torch.tensor(i), no_spline=True)
                 ctrl_knots_xyz.append(xyz)
             ctrl_knots_xyz = torch.concat(ctrl_knots_xyz)
             self.spliner.set_data("xyz", ctrl_knots_xyz.permute(1, 0, 2))
+
+        if self.cfg.d_gs_scale:
+            ctrl_knots_scales = []
+            for i, t in enumerate(ticks):
+                scale = self.get_timed_scales(t, torch.tensor(i), no_spline=True)
+                ctrl_knots_scales.append(scale)
+
+            ctrl_knots_scales = torch.stack(ctrl_knots_scales)
+            self.spliner.set_data("scales", ctrl_knots_scales.permute(1, 0, 2))
 
     def compute_control_knots_dg(self):
         ticks = torch.as_tensor(
@@ -449,8 +478,6 @@ class DynamicSuGaRModel(SuGaRModel):
         frame_idx = torch.arange(self.cfg.num_frames, dtype=torch.long, device=self.device)
         trans, rot = self.get_timed_dg_trans_rotation(ticks, frame_idx)
 
-
-
         node_ctrl_knots_trans = trans.permute(1, 0, 2)
         node_ctrl_knots_rots = pp.SO3(rot.permute(1, 0, 2))
         self.spliner.set_data("xyz", node_ctrl_knots_trans)
@@ -459,8 +486,11 @@ class DynamicSuGaRModel(SuGaRModel):
     def spline_interp_xyz(self, timestamp: Float[Tensor, "N_t"]):
         return self.spliner(timestamp, keys=["xyz"])["xyz"]
 
+    def spline_interp_scales(self, timestamp: Float[Tensor, "N_t"]):
+        return self.spliner(timestamp, keys=["scales"])["scales"]
+
     def spline_interp_dg(self, timestamp: Float[Tensor, "N_t"]) -> Tuple[Tensor, pp.LieTensor]:
-        outs = self.spliner(timestamp)
+        outs = self.spliner(timestamp, keys=["xyz", "rotation"])
         return outs["xyz"], outs["rotation"]
 
     def build_deformation_graph(self, n_nodes, nodes_connectivity=6):
@@ -523,13 +553,14 @@ class DynamicSuGaRModel(SuGaRModel):
         neighbor_nodes_xyz = self._deform_graph_node_xyz[self._xyz_neighbor_node_idx]
         # neighbor_nodes_rots = self._deform_graph_node_rots[self._xyz_neighbor_node_idx]
         # neighbor_nodes_trans = self._deform_graph_node_trans[self._xyz_neighbor_node_idx]
+
         if self.cfg.use_spline:
             dg_node_trans, dg_node_rots = self.spline_interp_dg(timestamp)
         else:
-            raise NotImplementedError
-            # TODO fix problem here. The delta attr is designed for control knots num not for keyframe num
-            # dg_node_trans = self._dg_node_trans[frame_idx]
-            # dg_node_rots = pp.SO3(self._dg_node_rots[frame_idx])
+            assert frame_idx is not None
+            # ! discrete mode is not compatible with no spline config
+            dg_node_trans = self._dg_node_trans[frame_idx]
+            dg_node_rots = pp.SO3(self._dg_node_rots[frame_idx])
 
         neighbor_nodes_trans: Float[Tensor, "N_t N_p N_n 3"]
         neighbor_nodes_rots: Float[Tensor, "N_t N_p N_n 3 3"]

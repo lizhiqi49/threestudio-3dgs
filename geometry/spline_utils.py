@@ -216,9 +216,9 @@ class Spline(nn.Module):
 
         if len(self.interp_param_names) == 0:
             raise ValueError("You must set control knots before interpolation!")
-        
+
         outs = {}
-        names = self.interp_param_names if keys is None else keys 
+        names = self.interp_param_names if keys is None else keys
         for name in names:
             knots: Float[Tensor, "N_pts N_knots N_feature"] = getattr(self, name)
             indices = start_index[..., None] + torch.arange(self.order, device=start_index.device)[None]
@@ -227,17 +227,17 @@ class Spline(nn.Module):
             segment: Float[Tensor, "B N_pts N_order N_feature"]
             segment = knots[:, indices, :]
             segment = rearrange(segment, "N (B K) F -> B N K F", B=batch_size, K=self.order)
-            
+
             interp: Float[Tensor, "B N_pts N_feature"]
             interp = self.interpolation(
-                segment.reshape(-1, *segment.shape[2:]), 
+                segment.reshape(-1, *segment.shape[2:]),
                 u.repeat_interleave(knots.shape[0])[..., None],
                 name,  # (N, interpolation=1)
             ).reshape(batch_size, knots.shape[0], knots.shape[-1])
             outs[name] = interp
 
         return outs
-    
+
     def interpolation(self, segment, u, name):
         if self.config.degree == 1:
             return self.linear_interpolation(segment, u, name)
@@ -247,9 +247,9 @@ class Spline(nn.Module):
             assert_never(self.cfg.degree)
 
     def cubic_bspline_interpolation(
-        self, 
-        ctrl_knots: Float[Tensor, "N 4 n_feature"], 
-        u: Float[Tensor, "N 1"], 
+        self,
+        ctrl_knots: Float[Tensor, "N 4 n_feature"],
+        u: Float[Tensor, "N 1"],
         name: str,
         enable_eps: bool = False
     ):
@@ -298,8 +298,9 @@ class Spline(nn.Module):
             ], dim=-3)  # (*batch_size, num_ctrl_knots=4, interpolations, 4)
             q_t = pp.cumprod(q_ts, dim=-3, left=False)[..., -1, :, :]
             ret = q_t.squeeze(-2)
-        else:
-            raise NotImplementedError
+        elif name == "scales":
+            assert ctrl_knots.shape[-1] == -2
+
 
         return ret
 
@@ -341,7 +342,7 @@ class Spline(nn.Module):
         else:
             assert_never(self.config.degree)
 
-            
+
 # class Spline(nn.Module):
 #     """SE(3) spline trajectory.
 
