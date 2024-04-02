@@ -183,6 +183,9 @@ class SuGaRModel(BaseGeometry):
                 verts, dtype=torch.float32, device=self.device
             ).requires_grad_(self.learn_positions)
         )
+
+        self._faces = faces
+
         # n_points refer to num of gaussians
         self._n_points = len(faces) * self.cfg.n_gaussians_per_surface_triangle
         self._vertex_colors = torch.as_tensor(

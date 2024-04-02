@@ -2,10 +2,12 @@ import math
 import os
 import random
 import sys
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import NamedTuple
 
+import numpy
 import numpy as np
 import threestudio
 import torch
@@ -29,6 +31,8 @@ from .gaussian_base import SH2RGB, RGB2SH
 from .sugar import SuGaRModel
 from .deformation import DeformationNetwork, ModelHiddenParams
 from .spline_utils import Spline, SplineConfig
+import pygeodesic
+import pygeodesic.geodesic as geodesic
 
 
 @threestudio.register("dynamic-sugar")
@@ -493,51 +497,89 @@ class DynamicSuGaRModel(SuGaRModel):
         outs = self.spliner(timestamp, keys=["xyz", "rotation"])
         return outs["xyz"], outs["rotation"]
 
-    def build_deformation_graph(self, n_nodes, nodes_connectivity=6):
+    def build_deformation_graph(self, n_nodes, nodes_connectivity=6, mode="geodisc"):
         device = self.device
         xyz_verts = self.get_xyz_verts
         self._xyz_cpu = xyz_verts.cpu().numpy()
-
         mesh = o3d.io.read_triangle_mesh(self.cfg.surface_mesh_to_bind_path)
         downpcd = mesh.sample_points_uniformly(number_of_points=n_nodes)
         # downpcd = mesh.sample_points_poisson_disk(number_of_points=1000, pcl=downpcd)
 
         # build deformation graph connectivity
         downpcd.paint_uniform_color([0.5, 0.5, 0.5])
+        self._deform_graph_node_xyz = torch.from_numpy(np.asarray(downpcd.points)).float().to(device)
+
         downpcd_tree = o3d.geometry.KDTreeFlann(downpcd)
 
-        self._deform_graph_node_xyz = torch.from_numpy(np.asarray(downpcd.points)).float().to(device)
-        downpcd_size, _ = self._deform_graph_node_xyz.size()
-        deform_graph_connectivity = [
-            torch.from_numpy(
-                np.asarray(
-                    downpcd_tree.search_knn_vector_3d(downpcd.points[i], nodes_connectivity + 1)[1][1:]
-                )
-            ).to(device)
-            for i in range(downpcd_size)
-        ]
+        if mode == "eucdisc":
+            downpcd_size, _ = self._deform_graph_node_xyz.size()
+            # TODO delete unused connectivity attr
+            deform_graph_connectivity = [
+                torch.from_numpy(
+                    np.asarray(
+                        downpcd_tree.search_knn_vector_3d(downpcd.points[i], nodes_connectivity + 1)[1][1:]
+                    )
+                ).to(device)
+                for i in range(downpcd_size)
+            ]
+            self._deform_graph_connectivity = torch.stack(deform_graph_connectivity).long().to(device)
+            self._deform_graph_tree = downpcd_tree
 
-        self._deform_graph_connectivity = torch.stack(deform_graph_connectivity).long().to(device)
-        self._deform_graph_tree = downpcd_tree
+            # build connections between the original point cloud to deformation graph node
+            xyz_neighbor_node_idx = [
+                torch.from_numpy(
+                    np.asarray(downpcd_tree.search_knn_vector_3d(self._xyz_cpu[i], nodes_connectivity)[1])
+                ).to(device)
+                for i in range(self._xyz_cpu.shape[0])
+            ]
+            xyz_neighbor_nodes_weights = [
+                torch.from_numpy(
+                    np.asarray(downpcd_tree.search_knn_vector_3d(self._xyz_cpu[i], nodes_connectivity)[2])
+                ).float().to(device)
+                for i in range(self._xyz_cpu.shape[0])
+            ]
+        elif mode == "geodisc":
+            vertices = self._xyz_cpu
+            faces = self._faces
+            # init geodisc calculation algorithm
+            geoalg = geodesic.PyGeodesicAlgorithmExact(vertices, faces)
 
-        # build connections between the original point cloud to deformation graph node
-        xyz_neighbor_node_idx = [
-            torch.from_numpy(
-                np.asarray(downpcd_tree.search_knn_vector_3d(self._xyz_cpu[i], nodes_connectivity)[1])
-            ).to(device)
-            for i in range(self._xyz_cpu.shape[0])
-        ]
-        xyz_neighbor_nodes_weights = [
-            torch.from_numpy(
-                np.asarray(downpcd_tree.search_knn_vector_3d(self._xyz_cpu[i], nodes_connectivity)[2])
-            ).float().to(device)
-            for i in range(self._xyz_cpu.shape[0])
-        ]
+            # 1. build a kd tree for all vertices in mesh
+            mesh_pcl = o3d.geometry.PointCloud()
+            mesh_pcl.points = o3d.utility.Vector3dVector(mesh.vertices)
+            mesh_kdtree = o3d.geometry.KDTreeFlann(mesh_pcl)
+
+            # 2. find the nearest vertex of all downsampled points and get their index.
+            nearest_vertex = [
+                np.asarray(mesh_kdtree.search_knn_vector_3d(downpcd.points[i], 10)[1])[0]
+                for i in range(n_nodes)
+            ]
+            target_index = np.array(nearest_vertex)
+
+            # 3. find k nearest neighbors(geodistance) of mesh vertices and downsample pointcloud
+            xyz_neighbor_node_idx = []
+            xyz_neighbor_nodes_weights = []
+            for i in range(self._xyz_cpu.shape[0]):
+                source_index = np.array([i])
+                start_time1 = time.time()
+                distances = geoalg.geodesicDistances(source_index, target_index)[0]
+                print(f"i: {i}, geodist calculation: {time.time() - start_time1}")
+                start_time2 = time.time()
+                sorted_index = np.argsort(distances)
+                print(f"i: {i}, sort: {time.time() - start_time2}")
+
+                xyz_neighbor_node_idx.append(torch.from_numpy(sorted_index[:nodes_connectivity]).to(device))
+                xyz_neighbor_nodes_weights.append(
+                    torch.from_numpy(distances[sorted_index[:nodes_connectivity]]).float().to(device))
+        else:
+            print("The mode must be eucdisc or geodisc!")
+            raise NotImplementedError
 
         self._xyz_neighbor_node_idx = torch.stack(xyz_neighbor_node_idx).long().to(device)
+
         self._xyz_neighbor_nodes_weights = torch.stack(xyz_neighbor_nodes_weights).to(device)
         self._xyz_neighbor_nodes_weights = torch.sqrt(self._xyz_neighbor_nodes_weights)
-        # xyz_neighbor_nodes_weights = torch.sqrt(torch.tensor(xyz_neighbor_nodes_weights))
+        # normalize
         self._xyz_neighbor_nodes_weights = (
             self._xyz_neighbor_nodes_weights
             / self._xyz_neighbor_nodes_weights.sum(dim=1, keepdim=True)

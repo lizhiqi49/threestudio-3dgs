@@ -66,14 +66,14 @@ system:
     delta_xyz_lr: 0.001
     delta_scales_lr: 0.001
 
-    dynamic_mode: discrete # (deformation / discrete)
+    dynamic_mode: deformation # (deformation / discrete)
 
     # for deformation dynamic mode
     deformation_lr: 0.0008 # 0.0064
     grid_lr: 0.0008 # 0.0064
 
     # dynamic attr
-    d_gs_scale: true
+    d_gs_scale: false
 
     spatial_extent: ${data.default_camera_distance}
     spatial_lr_scale: 1
