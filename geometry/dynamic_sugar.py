@@ -271,12 +271,13 @@ class DynamicSuGaRModel(SuGaRModel):
         return xyz_gs_timed
 
     def get_timed_all(self, timestamp=None, frame_idx=None):
+        means3D = self.get_timed_xyz_gs(timestamp, frame_idx)[0]
+
         # common variables
         common_kwargs = self.get_common_kwargs(timestamp, frame_idx)
 
-        means3D = self.get_timed_xyz_gs(timestamp, frame_idx)[0]
+        scales = self.get_timed_scales(timestamp, frame_idx, **common_kwargs)[0]
 
-        scales = self.get_timed_scales(timestamp, frame_idx, **common_kwargs)
         rotations = self.get_rotation
         opacity = self.get_opacity
         colors_precomp = self.get_points_rgb()
@@ -463,7 +464,8 @@ class DynamicSuGaRModel(SuGaRModel):
             ctrl_knots_scales = []
             for i, t in enumerate(ticks):
                 scale = self.get_timed_scales(t, torch.tensor(i), no_spline=True)
-                ctrl_knots_scales.append(scale)
+                ctrl_knots_scales.append(
+                    torch.cat([scale, torch.zeros([scale.shape[0], 1], device=scale.device)], dim=1))
 
             ctrl_knots_scales = torch.stack(ctrl_knots_scales)
             self.spliner.set_data("scales", ctrl_knots_scales.permute(1, 0, 2))
@@ -491,13 +493,13 @@ class DynamicSuGaRModel(SuGaRModel):
         return self.spliner(timestamp, keys=["xyz"])["xyz"]
 
     def spline_interp_scales(self, timestamp: Float[Tensor, "N_t"]):
-        return self.spliner(timestamp, keys=["scales"])["scales"]
+        return self.spliner(timestamp, keys=["scales"])["scales"][..., :2]
 
     def spline_interp_dg(self, timestamp: Float[Tensor, "N_t"]) -> Tuple[Tensor, pp.LieTensor]:
         outs = self.spliner(timestamp, keys=["xyz", "rotation"])
         return outs["xyz"], outs["rotation"]
 
-    def build_deformation_graph(self, n_nodes, nodes_connectivity=6, mode="geodisc"):
+    def build_deformation_graph(self, n_nodes, nodes_connectivity=6, mode="eucdisc"):
         device = self.device
         xyz_verts = self.get_xyz_verts
         self._xyz_cpu = xyz_verts.cpu().numpy()

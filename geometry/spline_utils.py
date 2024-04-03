@@ -17,7 +17,7 @@ _EPS = 1e-6
 
 
 def linear_interpolation_mid(
-        ctrl_knots: Float[LieTensor, "*batch_size 2 7"],
+    ctrl_knots: Float[LieTensor, "*batch_size 2 7"],
 ) -> Float[LieTensor, "*batch_size 7"]:
     """Get the midpoint between batches of two SE(3) poses by linear interpolation.
 
@@ -42,9 +42,9 @@ def linear_interpolation_mid(
 
 
 def linear_interpolation(
-        ctrl_knots: Float[LieTensor, "*batch_size 2 7"],
-        u: Float[Tensor, "interpolations"] | Float[Tensor, "*batch_size interpolations"],
-        enable_eps: bool = False,
+    ctrl_knots: Float[LieTensor, "*batch_size 2 7"],
+    u: Float[Tensor, "interpolations"] | Float[Tensor, "*batch_size interpolations"],
+    enable_eps: bool = False,
 ) -> Float[LieTensor, "*batch_size interpolations 7"]:
     """Linear interpolation between batches of two SE(3) poses.
 
@@ -82,9 +82,9 @@ def linear_interpolation(
 
 
 def cubic_bspline_interpolation(
-        ctrl_knots: Float[LieTensor, "*batch_size 4 7"],
-        u: Float[Tensor, "interpolations"] | Float[Tensor, "*batch_size interpolations"],
-        enable_eps: bool = True,
+    ctrl_knots: Float[LieTensor, "*batch_size 4 7"],
+    u: Float[Tensor, "interpolations"] | Float[Tensor, "*batch_size interpolations"],
+    enable_eps: bool = True,
 ) -> Float[LieTensor, "*batch_size interpolations 7"]:
     """Cubic B-spline interpolation with batches of four SE(3) control knots.
 
@@ -266,7 +266,7 @@ class Spline(nn.Module):
         uuu = uu * u
         oos = 1.0 / 6.0  # one over six
 
-        if name == "xyz":
+        if name in ["xyz", "scales"]:
             assert ctrl_knots.shape[-1] == 3
             # t coefficients
             coeffs_t = torch.stack([
@@ -298,9 +298,6 @@ class Spline(nn.Module):
             ], dim=-3)  # (*batch_size, num_ctrl_knots=4, interpolations, 4)
             q_t = pp.cumprod(q_ts, dim=-3, left=False)[..., -1, :, :]
             ret = q_t.squeeze(-2)
-        elif name == "scales":
-            assert ctrl_knots.shape[-1] == -2
-
 
         return ret
 
@@ -341,7 +338,6 @@ class Spline(nn.Module):
             self.t_upper_bound = self.end_time - self.config.sampling_interval
         else:
             assert_never(self.config.degree)
-
 
 # class Spline(nn.Module):
 #     """SE(3) spline trajectory.
