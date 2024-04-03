@@ -333,38 +333,44 @@ class DynamicSuGaRModel(SuGaRModel):
                 ds = self._deformation.forward_dynamic_scale(None, None, hidden=hidden)
                 scales = self._scales + ds
 
+            scales = torch.cat([
+                self.surface_mesh_thickness * torch.ones(len(scales), 1, device=scales.device),
+                self.scale_activation(scales)
+            ], dim=-1)
+
+
         return scales
 
-    def get_timed_no_dg_gs(
-        self,
-        timestamp: Float[Tensor, "N_t"] = None,
-        frame_idx: Int[Tensor, "N_t"] = None,
-        no_spline: bool = False
-    ):
-        # get other timed gaussian attributes(no deformation graph)
-        scales, rotations, opacity, colors_precomp = None, None, None, None
-
-        if timestamp is not None:
-            if timestamp.ndim == 0:
-                timestamp = timestamp.unsqueeze(-1)
-        if frame_idx is not None:
-            if frame_idx.ndim == 0:
-                frame_idx = frame_idx.unsqueeze(-1)
-
-        xyz_v = self._points.unsqueeze(0)
-        xyz_gs = self.get_gs_xyz_from_vertices(xyz_v)
-
-        if not no_spline and self.cfg.use_spline:
-            raise NotImplementedError
-        else:
-            if self.dynamic_mode == "discrete":
-                raise NotImplementedError
-            elif self.dynamic_mode == "deformation":
-                pts_inp = torch.cat([xyz_gs] * timestamp.shape[-1], dim=0).reshape(-1, 3)
-                time_inp = timestamp.unsqueeze(-1).repeat_interleave(xyz_gs.shape[0], dim=0) * 2 - 1
-
-                # add deformation forward function for scaling predict
-                # xyz_gs_timed = self._deformation.forward_dynamic_xyz(pts_inp, time_inp)
+    # def get_timed_no_dg_gs(
+    #     self,
+    #     timestamp: Float[Tensor, "N_t"] = None,
+    #     frame_idx: Int[Tensor, "N_t"] = None,
+    #     no_spline: bool = False
+    # ):
+    #     # get other timed gaussian attributes(no deformation graph)
+    #     scales, rotations, opacity, colors_precomp = None, None, None, None
+    #
+    #     if timestamp is not None:
+    #         if timestamp.ndim == 0:
+    #             timestamp = timestamp.unsqueeze(-1)
+    #     if frame_idx is not None:
+    #         if frame_idx.ndim == 0:
+    #             frame_idx = frame_idx.unsqueeze(-1)
+    #
+    #     xyz_v = self._points.unsqueeze(0)
+    #     xyz_gs = self.get_gs_xyz_from_vertices(xyz_v)
+    #
+    #     if not no_spline and self.cfg.use_spline:
+    #         raise NotImplementedError
+    #     else:
+    #         if self.dynamic_mode == "discrete":
+    #             raise NotImplementedError
+    #         elif self.dynamic_mode == "deformation":
+    #             pts_inp = torch.cat([xyz_gs] * timestamp.shape[-1], dim=0).reshape(-1, 3)
+    #             time_inp = timestamp.unsqueeze(-1).repeat_interleave(xyz_gs.shape[0], dim=0) * 2 - 1
+    #
+    #             # add deformation forward function for scaling predict
+    #             # xyz_gs_timed = self._deformation.forward_dynamic_xyz(pts_inp, time_inp)
 
     def get_timed_dg_trans_rotation(
         self,
@@ -459,13 +465,11 @@ class DynamicSuGaRModel(SuGaRModel):
                 ctrl_knots_xyz.append(xyz)
             ctrl_knots_xyz = torch.concat(ctrl_knots_xyz)
             self.spliner.set_data("xyz", ctrl_knots_xyz.permute(1, 0, 2))
-
         if self.cfg.d_gs_scale:
             ctrl_knots_scales = []
             for i, t in enumerate(ticks):
                 scale = self.get_timed_scales(t, torch.tensor(i), no_spline=True)
-                ctrl_knots_scales.append(
-                    torch.cat([scale, torch.zeros([scale.shape[0], 1], device=scale.device)], dim=1))
+                ctrl_knots_scales.append(scale)
 
             ctrl_knots_scales = torch.stack(ctrl_knots_scales)
             self.spliner.set_data("scales", ctrl_knots_scales.permute(1, 0, 2))
@@ -493,7 +497,7 @@ class DynamicSuGaRModel(SuGaRModel):
         return self.spliner(timestamp, keys=["xyz"])["xyz"]
 
     def spline_interp_scales(self, timestamp: Float[Tensor, "N_t"]):
-        return self.spliner(timestamp, keys=["scales"])["scales"][..., :2]
+        return self.spliner(timestamp, keys=["scales"])["scales"]
 
     def spline_interp_dg(self, timestamp: Float[Tensor, "N_t"]) -> Tuple[Tensor, pp.LieTensor]:
         outs = self.spliner(timestamp, keys=["xyz", "rotation"])
