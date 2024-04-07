@@ -31,8 +31,10 @@ from .gaussian_base import SH2RGB, RGB2SH
 from .sugar import SuGaRModel
 from .deformation import DeformationNetwork, ModelHiddenParams
 from .spline_utils import Spline, SplineConfig
-import pygeodesic
-import pygeodesic.geodesic as geodesic
+# import pygeodesic
+# import pygeodesic.geodesic as geodesic
+
+import potpourri3d as pp3d
 
 
 @threestudio.register("dynamic-sugar")
@@ -338,7 +340,6 @@ class DynamicSuGaRModel(SuGaRModel):
                 self.scale_activation(scales)
             ], dim=-1)
 
-
         return scales
 
     # def get_timed_no_dg_gs(
@@ -550,8 +551,11 @@ class DynamicSuGaRModel(SuGaRModel):
             vertices = np.asarray(mesh.vertices)
             faces = np.asarray(mesh.triangles)
 
-            # init geodisc calculation algorithm
-            geoalg = geodesic.PyGeodesicAlgorithmExact(vertices, faces)
+            # init geodisc calculation algorithm (geodesic version)
+            # geoalg = geodesic.PyGeodesicAlgorithmExact(vertices, faces)
+
+            # init geodisc calculation algorithm (potpourri3d  version)
+            geoalg = pp3d.MeshHeatMethodDistanceSolver(vertices, faces)
 
             # 1. build a kd tree for all vertices in mesh
             mesh_pcl = o3d.geometry.PointCloud()
@@ -571,13 +575,19 @@ class DynamicSuGaRModel(SuGaRModel):
             for i in range(self._xyz_cpu.shape[0]):
                 source_index = np.array([i])
                 start_time1 = time.time()
-                distances = geoalg.geodesicDistances(source_index, target_index)[0]
+                # geodesic distance calculation
+                # distances = geoalg.geodesicDistances(source_index, target_index)[0]
+
+                # potpourri3d distance calculation
+                distances = geoalg.compute_distance(source_index)[target_index]
+
                 print(f"i: {i}, geodist calculation: {time.time() - start_time1}")
                 start_time2 = time.time()
                 sorted_index = np.argsort(distances)
                 print(f"i: {i}, sort: {time.time() - start_time2}")
 
-                xyz_neighbor_node_idx.append(torch.from_numpy(sorted_index[:nodes_connectivity]).to(device))
+                xyz_neighbor_node_idx.append(
+                    torch.from_numpy(sorted_index[:nodes_connectivity]).to(device))
                 xyz_neighbor_nodes_weights.append(
                     torch.from_numpy(distances[sorted_index[:nodes_connectivity]]).float().to(device))
         else:
@@ -585,6 +595,10 @@ class DynamicSuGaRModel(SuGaRModel):
             raise NotImplementedError
 
         self._xyz_neighbor_node_idx = torch.stack(xyz_neighbor_node_idx).long().to(device)
+
+        print(torch.max(self._xyz_neighbor_node_idx))
+        print(torch.min(self._xyz_neighbor_node_idx))
+
 
         self._xyz_neighbor_nodes_weights = torch.stack(xyz_neighbor_nodes_weights).to(device)
         self._xyz_neighbor_nodes_weights = torch.sqrt(self._xyz_neighbor_nodes_weights)
