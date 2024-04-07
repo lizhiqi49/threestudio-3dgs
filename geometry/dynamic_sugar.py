@@ -503,7 +503,7 @@ class DynamicSuGaRModel(SuGaRModel):
         outs = self.spliner(timestamp, keys=["xyz", "rotation"])
         return outs["xyz"], outs["rotation"]
 
-    def build_deformation_graph(self, n_nodes, nodes_connectivity=6, mode="eucdisc"):
+    def build_deformation_graph(self, n_nodes, nodes_connectivity=6, mode="geodisc"):
         device = self.device
         xyz_verts = self.get_xyz_verts
         self._xyz_cpu = xyz_verts.cpu().numpy()
@@ -545,8 +545,11 @@ class DynamicSuGaRModel(SuGaRModel):
                 for i in range(self._xyz_cpu.shape[0])
             ]
         elif mode == "geodisc":
-            vertices = self._xyz_cpu
-            faces = self._faces
+            # vertices = self._xyz_cpu
+            # faces = self._surface_mesh_faces.cpu().numpy()
+            vertices = np.asarray(mesh.vertices)
+            faces = np.asarray(mesh.triangles)
+
             # init geodisc calculation algorithm
             geoalg = geodesic.PyGeodesicAlgorithmExact(vertices, faces)
 
@@ -557,7 +560,7 @@ class DynamicSuGaRModel(SuGaRModel):
 
             # 2. find the nearest vertex of all downsampled points and get their index.
             nearest_vertex = [
-                np.asarray(mesh_kdtree.search_knn_vector_3d(downpcd.points[i], 10)[1])[0]
+                np.asarray(mesh_kdtree.search_knn_vector_3d(downpcd.points[i], 1)[1])[0]
                 for i in range(n_nodes)
             ]
             target_index = np.array(nearest_vertex)
