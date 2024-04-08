@@ -238,7 +238,7 @@ class SuGaR4DGen(BaseLift3DSystem):
                         "laplacian_smoothing",
                         mesh_laplacian_smoothing(surface_meshes, "uniform")
                     )
-                
+
         elif guidance == "zero123":
             # zero123
             guidance_out = self.guidance_zero123(
@@ -280,12 +280,12 @@ class SuGaR4DGen(BaseLift3DSystem):
         ):
             loss_normal_tv = tv_loss(out["comp_normal"].permute(0, 3, 1, 2))
             set_loss("normal_tv", loss_normal_tv)
-        
+
         if self.stage != "static" and guidance == "ref" and self.C(self.cfg.loss.lambda_ref_xyz) > 0:
             xyz_f0 = self.geometry.get_timed_xyz_vertices(torch.as_tensor(0, dtype=torch.float32, device=self.device))
             loss_ref_xyz = torch.abs(xyz_f0 - self.geometry.get_xyz_verts).mean()
             set_loss("ref_xyz", loss_ref_xyz)
- 
+
         loss = 0.0
         for name, value in loss_terms.items():
             self.log(f"train/{name}", value)
@@ -303,7 +303,7 @@ class SuGaR4DGen(BaseLift3DSystem):
 
         out.update({"loss": loss})
         return out
-    
+
     def training_substep_inter_frames(self, batch, batch_idx):
         loss_terms = {}
         loss_prefix = "loss_interf_"
@@ -315,12 +315,12 @@ class SuGaR4DGen(BaseLift3DSystem):
         rand_range_start = np.random.rand() * (1 - self.cfg.length_inter_frames)
         rand_timestamps = torch.as_tensor(
             np.linspace(
-                rand_range_start, 
-                rand_range_start + self.cfg.length_inter_frames, 
-                self.cfg.num_inter_frames, 
+                rand_range_start,
+                rand_range_start + self.cfg.length_inter_frames,
+                self.cfg.num_inter_frames,
                 endpoint=True
-            ), 
-            dtype=torch.float32, 
+            ),
+            dtype=torch.float32,
             device=self.device
         )
 
@@ -346,7 +346,7 @@ class SuGaR4DGen(BaseLift3DSystem):
                 # guidance_eval=guidance_eval,
             )
             set_loss("sds_2d", guidance_out["loss_sds"])
-            
+
         # ARAP regularization
         if self.C(self.cfg.loss.lambda_arap_reg) > 0 and self.arap_coach is not None:
             # xyz_timed = []
@@ -370,7 +370,7 @@ class SuGaR4DGen(BaseLift3DSystem):
                 loss_arap += self.arap_coach.compute_arap_energy(
                     ref_points[idx], xyz_timed[i], edge_weights=self.arap_weight_matrices[idx]
                 )
-            
+
             # ARAP loss between neighboring frames
             for i, idx in enumerate(ref_timestamp_idx[:-1]):
                 loss_arap += self.arap_coach.compute_arap_energy(
@@ -383,7 +383,7 @@ class SuGaR4DGen(BaseLift3DSystem):
             #         self.ref_points[i], self.ref_points[i+1], self.knn_idx[i],
             #         nn_weights=self.knn_arap_weights[i]
             #     )
-            
+
             # loss_full_arap = loss_full_arap * 1 / len(ref_timestamp_idx)
             set_loss("arap_reg", loss_arap)
 
@@ -404,7 +404,7 @@ class SuGaR4DGen(BaseLift3DSystem):
         self.log(f"train/loss_interf", loss)
 
         return loss
-    
+
     def compute_xyz_for_key_frames(self, timestamps_kf):
         # points = []
         # for t in timestamps_kf:
@@ -413,7 +413,7 @@ class SuGaR4DGen(BaseLift3DSystem):
         # points = torch.stack(points, dim=0)
         points = self.geometry.get_timed_xyz_vertices(timestamps_kf)
         return points
-    
+
     @torch.no_grad()
     def reset_arap_weight_matrices(self, timestamps_kf):
         # Precompute vert's positions for each key frame
@@ -424,7 +424,7 @@ class SuGaR4DGen(BaseLift3DSystem):
                 p = self.geometry.get_timed_xyz_vertices(t)
                 points.append(p)
             points = torch.stack(points, dim=0)
-            
+
         # TODO: OOM occured, use all ones for now
         # Precompute the cot weight matrices for each frame
         # weight_matrices = torch.stack(
@@ -444,11 +444,11 @@ class SuGaR4DGen(BaseLift3DSystem):
         if self.geometry.cfg.use_spline:
             self.geometry.compute_control_knots()
             self.geometry.spliner.update_end_time()
-        
+
         if self.global_step >= self.cfg.freq.milestone_inter_frame_reg and self.arap_coach is None and self.C(self.cfg.loss.lambda_arap_reg) > 0:
             self.arap_coach = ARAPCoach(
-                self.geometry.get_xyz_verts, 
-                self.geometry.get_faces.cpu().numpy(), 
+                self.geometry.get_xyz_verts,
+                self.geometry.get_faces.cpu().numpy(),
                 self.device
             )
             self.reset_arap_weight_matrices(timestamps_kf=batch.get('timestamp'))
@@ -501,7 +501,7 @@ class SuGaR4DGen(BaseLift3DSystem):
                     ),
                     "frame_indices": (
                         torch.as_tensor([batch_idx], device=self.device)
-                        if self.geometry.num_frames > 1 else 
+                        if self.geometry.num_frames > 1 else
                         torch.as_tensor([0], device=self.device)
                     )
                 }

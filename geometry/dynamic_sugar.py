@@ -466,6 +466,7 @@ class DynamicSuGaRModel(SuGaRModel):
                 ctrl_knots_xyz.append(xyz)
             ctrl_knots_xyz = torch.concat(ctrl_knots_xyz)
             self.spliner.set_data("xyz", ctrl_knots_xyz.permute(1, 0, 2))
+
         if self.cfg.d_gs_scale:
             ctrl_knots_scales = []
             for i, t in enumerate(ticks):
@@ -601,6 +602,8 @@ class DynamicSuGaRModel(SuGaRModel):
 
 
         self._xyz_neighbor_nodes_weights = torch.stack(xyz_neighbor_nodes_weights).to(device)
+        # a = torch.sum(self._xyz_neighbor_nodes_weights < 0)
+        self._xyz_neighbor_nodes_weights[self._xyz_neighbor_nodes_weights < 0] = 0
         self._xyz_neighbor_nodes_weights = torch.sqrt(self._xyz_neighbor_nodes_weights)
         # normalize
         self._xyz_neighbor_nodes_weights = (
@@ -627,6 +630,13 @@ class DynamicSuGaRModel(SuGaRModel):
             dg_node_trans = self._dg_node_trans[frame_idx]
             dg_node_rots = pp.SO3(self._dg_node_rots[frame_idx])
 
+        # debug
+        # a = torch.sum(dg_node_trans)
+        # b = torch.sum(dg_node_rots)
+        # c = torch.sum(self._xyz_neighbor_node_idx)
+        # d = torch.sum(neighbor_nodes_xyz)
+        # e = torch.sum(self.get_xyz_verts)
+
         neighbor_nodes_trans: Float[Tensor, "N_t N_p N_n 3"]
         neighbor_nodes_rots: Float[Tensor, "N_t N_p N_n 3 3"]
         neighbor_nodes_trans = dg_node_trans[:, self._xyz_neighbor_node_idx]
@@ -644,6 +654,8 @@ class DynamicSuGaRModel(SuGaRModel):
         deformed_xyz = deformed_xyz + neighbor_nodes_xyz.unsqueeze(0) + neighbor_nodes_trans
 
         nn_weights = self._xyz_neighbor_nodes_weights[None, :, :, None]
+
+        # f = torch.sum(nn_weights)
         deformed_xyz = (nn_weights * deformed_xyz).sum(dim=2)
 
         return deformed_xyz
