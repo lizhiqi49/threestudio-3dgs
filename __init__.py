@@ -47,5 +47,6 @@ from .system import (
 from .data import temporal_image, image
 from .guidance import (
     temporal_stable_zero123_guidance,
-    stable_diffusion_lora_guidance
+    stable_diffusion_lora_guidance,
+    temporal_zero123_guidance
 )
