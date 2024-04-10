@@ -505,7 +505,7 @@ class DynamicSuGaRModel(SuGaRModel):
         outs = self.spliner(timestamp, keys=["xyz", "rotation"])
         return outs["xyz"], outs["rotation"]
 
-    def build_deformation_graph(self, n_nodes, nodes_connectivity=6, mode="geodisc"):
+    def build_deformation_graph(self, n_nodes, nodes_connectivity=6, mode="eucdisc"):
         device = self.device
         xyz_verts = self.get_xyz_verts
         self._xyz_cpu = xyz_verts.cpu().numpy()
