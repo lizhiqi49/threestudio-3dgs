@@ -573,6 +573,7 @@ class DynamicSuGaRModel(SuGaRModel):
             # 3. find k nearest neighbors(geodistance) of mesh vertices and downsample pointcloud
             xyz_neighbor_node_idx = []
             xyz_neighbor_nodes_weights = []
+            downpcd_points = np.asarray(downpcd.points)
             for i in range(self._xyz_cpu.shape[0]):
                 source_index = np.array([i])
                 start_time1 = time.time()
@@ -583,14 +584,15 @@ class DynamicSuGaRModel(SuGaRModel):
                 distances = geoalg.compute_distance(source_index)[target_index]
 
                 print(f"i: {i}, geodist calculation: {time.time() - start_time1}")
-                start_time2 = time.time()
                 sorted_index = np.argsort(distances)
-                print(f"i: {i}, sort: {time.time() - start_time2}")
 
-                xyz_neighbor_node_idx.append(
-                    torch.from_numpy(sorted_index[:nodes_connectivity]).to(device))
+                k_n_neighbor = sorted_index[:nodes_connectivity]
+
+                xyz_neighbor_node_idx.append(torch.from_numpy(k_n_neighbor).to(device))
+
                 xyz_neighbor_nodes_weights.append(
-                    torch.from_numpy(distances[sorted_index[:nodes_connectivity]]).float().to(device))
+                    torch.from_numpy(np.reciprocal(
+                        np.linalg.norm(vertices[i] - downpcd_points[k_n_neighbor], axis=1) + 1e-5)).float().to(device))
         else:
             print("The mode must be eucdisc or geodisc!")
             raise NotImplementedError
@@ -600,10 +602,9 @@ class DynamicSuGaRModel(SuGaRModel):
         print(torch.max(self._xyz_neighbor_node_idx))
         print(torch.min(self._xyz_neighbor_node_idx))
 
-
         self._xyz_neighbor_nodes_weights = torch.stack(xyz_neighbor_nodes_weights).to(device)
         # a = torch.sum(self._xyz_neighbor_nodes_weights < 0)
-        self._xyz_neighbor_nodes_weights[self._xyz_neighbor_nodes_weights < 0] = 0
+        # self._xyz_neighbor_nodes_weights[self._xyz_neighbor_nodes_weights < 0] = 0
         self._xyz_neighbor_nodes_weights = torch.sqrt(self._xyz_neighbor_nodes_weights)
         # normalize
         self._xyz_neighbor_nodes_weights = (
