@@ -614,10 +614,16 @@ class DynamicSuGaRModel(SuGaRModel):
         gs_attrs = {"xyz": gs_timed_xyz, "rotation": gs_timed_rots}
         # scales
         if self.cfg.d_scale:
-            gs_scales_orig = self.get_scaling
+            # gs_scales_orig = self._scales
+            gs_scales_orig = torch.cat([
+                torch.zeros(len(self._scales), 1, device=self.device),
+                self._scales], dim=-1)
             vert_timed_dscales = vert_attrs["scale"][:, self._gs_vert_connections, :]
             gs_timed_dscale = (self._gs_bary_weights[None] * vert_timed_dscales).sum(dim=-2)
             gs_timed_scales = gs_scales_orig + gs_timed_dscale
+            gs_timed_scales = torch.cat([
+                self.surface_mesh_thickness * torch.ones(*gs_timed_scales.shape[:-1], 1, device=self.device),
+                self.scale_activation(gs_timed_scales[..., 1:])], dim=-1)
             gs_attrs["scale"] = gs_timed_scales
 
         return gs_attrs

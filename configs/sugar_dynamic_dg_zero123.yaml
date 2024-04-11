@@ -10,8 +10,8 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   norm_timestamp: true
   # num of frames a batch
   num_frames: 8
-  height: [256, 512]
-  width: [256, 512]
+  height: 512
+  width: 512
   resolution_milestones: [100]
   default_elevation_deg: 5.0
   default_azimuth_deg: 0.0
@@ -22,7 +22,7 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   random_camera: # threestudio/data/uncond.py -> RandomCameraDataModuleConfig
     height: 256
     width: 256
-    batch_size: 4
+    batch_size: 2
     eval_height: 512
     eval_width: 512
     eval_batch_size: 1
@@ -43,6 +43,7 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
     batch_uniform_azimuth: False
     n_val_views: 120
     n_test_views: 120
+    rays_d_normalize: False
 
 system_type: "sugar-4dgen-system"
 system:
@@ -83,7 +84,7 @@ system:
     surface_mesh_to_bind_path: ""
     n_gaussians_per_surface_triangle: 6
 
-    exporter_type: "gaussian-mesh-exporter"
+  exporter_type: "gaussian-mesh-exporter"
 
   # renderer_type: "diff-gaussian-rasterizer-spacetime"
   renderer_type: "diff-sugar-rasterizer-temporal"
@@ -102,7 +103,7 @@ system:
     pretrained_model_name_or_path: ""
     prompt: ""
 
-  guidance_zero123_type: "temporal-zero123-guidance"
+  guidance_zero123_type: "temporal-stable-zero123-guidance"
   guidance_zero123:
     num_frames: ${data.video_length}
     pretrained_config: "./load/zero123/sd-objaverse-finetune-c_concat-256.yaml"
@@ -142,7 +143,7 @@ system:
     ref_only_steps: 0
     guidance_eval: 0
     inter_frame_reg: 0
-    milestone_inter_frame_reg: 0
+    milestone_arap_reg: 0
 
   loggers:
     wandb:
