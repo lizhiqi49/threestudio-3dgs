@@ -15,6 +15,12 @@ from threestudio import register
 from threestudio.utils.base import Updateable
 from threestudio.utils.config import parse_structured
 from threestudio.utils.misc import get_rank
+from threestudio.utils.ops import (
+    get_mvp_matrix,
+    get_projection_matrix,
+    get_ray_directions,
+    get_rays,
+)
 
 from threestudio.utils.typing import *
 
@@ -128,6 +134,10 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
             assert len(self.heights) == len(self.cfg.resolution_milestones) + 1
             self.resolution_milestones = [-1] + self.cfg.resolution_milestones
 
+        self.directions_unit_focals = [
+            get_ray_directions(H=height, W=width, focal=1.0)
+            for (height, width) in zip(self.heights, self.widths)
+        ]
         self.focal_lengths = [
             0.5 * height / torch.tan(0.5 * self.fovy) for height in self.heights
         ]
@@ -135,6 +145,8 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         self.height: int = self.heights[0]
         self.width: int = self.widths[0]
         self.focal_length = self.focal_lengths[0]
+        self.directions_unit_focal = self.directions_unit_focals[0]
+        self.set_rays()
         self.load_video_frames()
         self.prev_height = self.height
 
@@ -142,6 +154,27 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         self.timestamps = torch.as_tensor(
             np.linspace(0, 1, self.video_length, endpoint=True), dtype=torch.float32
         )
+
+    def set_rays(self):
+        # get directions by dividing directions_unit_focal by focal length
+        directions: Float[Tensor, "1 H W 3"] = self.directions_unit_focal[None]
+        directions[:, :, :, :2] = directions[:, :, :, :2] / self.focal_length
+
+        rays_o, rays_d = get_rays(
+            directions,
+            self.c2w4x4,
+            keepdim=True,
+            noise_scale=self.cfg.rays_noise_scale,
+            normalize=self.cfg.rays_d_normalize,
+        )
+
+        proj_mtx: Float[Tensor, "4 4"] = get_projection_matrix(
+            self.fovy, self.width / self.height, 0.1, 100.0
+        )  # FIXME: hard-coded near and far
+        mvp_mtx: Float[Tensor, "4 4"] = get_mvp_matrix(self.c2w4x4, proj_mtx)
+
+        self.rays_o, self.rays_d = rays_o, rays_d
+        self.mvp_mtx = mvp_mtx
 
     # Copied from threestudio.data.image.SingleImageDataBase.load_images
     def load_single_frame(self, frame_path):
@@ -249,9 +282,9 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         timestamps = self.timestamps[rand_frame_idx]
         frame_indices = self.frame_indices[rand_frame_idx]
         batch = {
-            # "rays_o": self.rays_o,
-            # "rays_d": self.rays_d,
-            # "mvp_mtx": self.mvp_mtx,
+            "rays_o": self.rays_o.repeat(self.num_frames, 1, 1, 1),
+            "rays_d": self.rays_d.repeat(self.num_frames, 1, 1, 1),
+            "mvp_mtx": self.mvp_mtx.repeat(self.num_frames, 1, 1),
             "camera_positions": self.camera_position,
             "light_positions": self.light_position,
             "elevation": self.elevation_deg,

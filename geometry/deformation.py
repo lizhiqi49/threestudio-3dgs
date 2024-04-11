@@ -363,7 +363,7 @@ class Deformation(nn.Module):
         output_dim = self.W
         return \
             Head_Res_Net(self.W, 3), \
-                Head_Res_Net(self.W, 2), \
+                Head_Res_Net(self.W, 3), \
                 Head_Res_Net(self.W, 4), \
                 Head_Res_Net(self.W, 1)
 
@@ -417,6 +417,14 @@ class Deformation(nn.Module):
         # print("deformation value:","pts:",torch.abs(dx).mean(),"rotation:",torch.abs(dr).mean())
 
         return pts, scales, rotations, opacity
+    
+    def forward_dynamic_delta(self, rays_pts_emb, time_emb=None):
+        hidden = self.query_time(rays_pts_emb, None, None, time_emb).float()
+        dx = self.pos_deform(hidden)
+        ds = None if self.args.no_ds else self.scales_deform(hidden)
+        dr = None if self.args.no_dr else self.rotations_deform(hidden)
+        do = None if self.args.no_do else self.opacity_deform(hidden)
+        return dx, dr, ds, do
 
     def forward_dynamic_xyz(self, rays_pts_emb, time_emb):
         hidden = self.query_time(rays_pts_emb, None, None, time_emb).float()
@@ -517,6 +525,9 @@ class DeformationNetwork(nn.Module):
                                                                    # times_feature,
                                                                    times_sel)
         return means3D, scales, rotations, opacity
+    
+    def forward_dynamic_delta(self, point, times_sel):
+        return self.deformation_net.forward_dynamic_delta(point, times_sel)
 
     def forward_dynamic_xyz(self, point, times_sel):
         return self.deformation_net.forward_dynamic_xyz(point, times_sel)
