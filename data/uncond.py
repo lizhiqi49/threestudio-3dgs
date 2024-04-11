@@ -15,6 +15,13 @@ from threestudio.utils.base import Updateable
 from threestudio.utils.config import parse_structured
 from threestudio.utils.misc import get_device
 
+from threestudio.utils.ops import (
+    get_mvp_matrix,
+    get_projection_matrix,
+    get_ray_directions,
+    get_rays,
+)
+
 from threestudio.utils.typing import *
 
 
@@ -31,6 +38,7 @@ class RandomCameraDataModuleConfig:
     eval_batch_size: int = 1
     n_val_views: int = 1
     n_test_views: int = 120
+    n_predict_views: int = 800
     elevation_range: Tuple[float, float] = (-10, 90)
     azimuth_range: Tuple[float, float] = (-180, 180)
     camera_distance_range: Tuple[float, float] = (1, 1.5)
@@ -49,9 +57,13 @@ class RandomCameraDataModuleConfig:
     light_sample_strategy: str = "dreamfusion"
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
+    predict_height: int = 512
+    predict_width: int = 512
     predict_azimuth_range: Tuple[float, float] = (-180, 180)
     predict_elevation_range: Tuple[float, float] = (-10, 80)
-    # rays_d_normalize: bool = True
+    predict_camera_distance_range: Tuple[float, float] = (1.5, 2.0)
+
+    rays_d_normalize: bool = True
 
 
 class RandomCameraIterableDataset(IterableDataset, Updateable):
@@ -85,14 +97,14 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
             assert len(self.heights) == len(self.cfg.resolution_milestones) + 1
             self.resolution_milestones = [-1] + self.cfg.resolution_milestones
 
-        # self.directions_unit_focals = [
-        #     get_ray_directions(H=height, W=width, focal=1.0)
-        #     for (height, width) in zip(self.heights, self.widths)
-        # ]
+        self.directions_unit_focals = [
+            get_ray_directions(H=height, W=width, focal=1.0)
+            for (height, width) in zip(self.heights, self.widths)
+        ]
         self.height: int = self.heights[0]
         self.width: int = self.widths[0]
         self.batch_size: int = self.batch_sizes[0]
-        # self.directions_unit_focal = self.directions_unit_focals[0]
+        self.directions_unit_focal = self.directions_unit_focals[0]
         self.elevation_range = self.cfg.elevation_range
         self.azimuth_range = self.cfg.azimuth_range
         self.camera_distance_range = self.cfg.camera_distance_range
@@ -301,13 +313,32 @@ class RandomCameraIterableDataset(IterableDataset, Updateable):
             [c2w3x4, torch.zeros_like(c2w3x4[:, :1])], dim=1
         )
         c2w[:, 3, 3] = 1.0
+        
+        # get directions by dividing directions_unit_focal by focal length
+        focal_length: Float[Tensor, "B"] = 0.5 * self.height / torch.tan(0.5 * fovy)
+        directions: Float[Tensor, "B H W 3"] = self.directions_unit_focal[
+            None, :, :, :
+        ].repeat(self.batch_size, 1, 1, 1)
+        directions[:, :, :, :2] = (
+            directions[:, :, :, :2] / focal_length[:, None, None, None]
+        )
+
+        # Importance note: the returned rays_d MUST be normalized!
+        rays_o, rays_d = get_rays(
+            directions, c2w, keepdim=True, normalize=self.cfg.rays_d_normalize
+        )
+
+        proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
+            fovy, self.width / self.height, 0.1, 1000.0
+        )  # FIXME: hard-coded near and far
+        mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, proj_mtx)
 
         self.fovy = fovy
 
         return {
-            # "rays_o": rays_o,
-            # "rays_d": rays_d,
-            # "mvp_mtx": mvp_mtx,
+            "rays_o": rays_o,
+            "rays_d": rays_d,
+            "mvp_mtx": mvp_mtx,
             "camera_positions": camera_positions,
             "c2w": c2w,
             "light_positions": light_positions,
@@ -384,7 +415,31 @@ class RandomCameraDataset(Dataset):
             [c2w3x4, torch.zeros_like(c2w3x4[:, :1])], dim=1
         )
         c2w[:, 3, 3] = 1.0
+        
+        # get directions by dividing directions_unit_focal by focal length
+        focal_length: Float[Tensor, "B"] = (
+            0.5 * self.cfg.eval_height / torch.tan(0.5 * fovy)
+        )
+        directions_unit_focal = get_ray_directions(
+            H=self.cfg.eval_height, W=self.cfg.eval_width, focal=1.0
+        )
+        directions: Float[Tensor, "B H W 3"] = directions_unit_focal[
+            None, :, :, :
+        ].repeat(self.n_views, 1, 1, 1)
+        directions[:, :, :, :2] = (
+            directions[:, :, :, :2] / focal_length[:, None, None, None]
+        )
 
+        rays_o, rays_d = get_rays(
+            directions, c2w, keepdim=True, normalize=self.cfg.rays_d_normalize
+        )
+        proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
+            fovy, self.cfg.eval_width / self.cfg.eval_height, 0.1, 1000.0
+        )  # FIXME: hard-coded near and far
+        mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, proj_mtx)
+
+        self.rays_o, self.rays_d = rays_o, rays_d
+        self.mvp_mtx = mvp_mtx
         self.c2w = c2w
         self.camera_positions = camera_positions
         self.light_positions = light_positions
@@ -399,9 +454,9 @@ class RandomCameraDataset(Dataset):
     def __getitem__(self, index):
         return {
             "index": index,
-            # "rays_o": self.rays_o[index],
-            # "rays_d": self.rays_d[index],
-            # "mvp_mtx": self.mvp_mtx[index],
+            "rays_o": self.rays_o[index],
+            "rays_d": self.rays_d[index],
+            "mvp_mtx": self.mvp_mtx[index],
             "c2w": self.c2w[index],
             "camera_positions": self.camera_positions[index],
             "light_positions": self.light_positions[index],
@@ -437,7 +492,8 @@ class RandomCameraArbiraryDataset(Dataset):
         self.batch_size = self.n_views
         self.azimuth_range = self.cfg.predict_azimuth_range
         self.elevation_range = self.cfg.predict_elevation_range
-        self.camera_distance_range = self.cfg.camera_distance_range
+        # self.camera_distance_range = self.cfg.camera_distance_range
+        self.camera_distance_range = self.cfg.predict_camera_distance_range
 
         azimuth_deg: Float[Tensor, "B"]
         if self.cfg.batch_uniform_azimuth:
@@ -531,6 +587,30 @@ class RandomCameraArbiraryDataset(Dataset):
         )
         c2w[:, 3, 3] = 1.0
 
+        # get directions by dividing directions_unit_focal by focal length
+        focal_length: Float[Tensor, "B"] = (
+            0.5 * self.cfg.predict_height / torch.tan(0.5 * fovy)
+        )
+        directions_unit_focal = get_ray_directions(
+            H=self.cfg.predict_height, W=self.cfg.predict_width, focal=1.0
+        )
+        directions: Float[Tensor, "B H W 3"] = directions_unit_focal[
+            None, :, :, :
+        ].repeat(self.n_views, 1, 1, 1)
+        directions[:, :, :, :2] = (
+            directions[:, :, :, :2] / focal_length[:, None, None, None]
+        )
+
+        rays_o, rays_d = get_rays(
+            directions, c2w, keepdim=True, normalize=self.cfg.rays_d_normalize
+        )
+        proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
+            fovy, self.cfg.predict_width / self.cfg.predict_height, 0.1, 1000.0
+        )  # FIXME: hard-coded near and far
+        mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, proj_mtx)
+
+        self.rays_o, self.rays_d = rays_o, rays_d
+        self.mvp_mtx = mvp_mtx
         self.c2w = c2w
         self.camera_positions = camera_positions
         self.light_positions = light_positions
@@ -545,17 +625,17 @@ class RandomCameraArbiraryDataset(Dataset):
     def __getitem__(self, index):
         return {
             "index": index,
-            # "rays_o": self.rays_o[index],
-            # "rays_d": self.rays_d[index],
-            # "mvp_mtx": self.mvp_mtx[index],
+            "rays_o": self.rays_o[index],
+            "rays_d": self.rays_d[index],
+            "mvp_mtx": self.mvp_mtx[index],
             "c2w": self.c2w[index],
             "camera_positions": self.camera_positions[index],
             "light_positions": self.light_positions[index],
             "elevation": self.elevation_deg[index],
             "azimuth": self.azimuth_deg[index],
             "camera_distances": self.camera_distances[index],
-            "height": self.cfg.eval_height,
-            "width": self.cfg.eval_width,
+            "height": self.cfg.predict_height,
+            "width": self.cfg.predict_width,
             "fovy": self.fovy[index],
             # "proj_mtx": self.proj_mtx[index],
             "n_all_views": self.n_views
@@ -563,11 +643,11 @@ class RandomCameraArbiraryDataset(Dataset):
 
     def collate(self, batch):
         batch = torch.utils.data.default_collate(batch)
-        batch.update({"height": self.cfg.eval_height, "width": self.cfg.eval_width})
+        batch.update({"height": self.cfg.predict_height, "width": self.cfg.predict_width})
         return batch
 
 
-@register("random-camera-gs-datamodule")
+@register("random-camera-sugar-datamodule")
 class RandomCameraDataModule(pl.LightningDataModule):
     cfg: RandomCameraDataModuleConfig
 
@@ -616,5 +696,5 @@ class RandomCameraDataModule(pl.LightningDataModule):
 
     def predict_dataloader(self) -> DataLoader:
         return self.general_loader(
-            self.test_dataset, batch_size=1, collate_fn=self.test_dataset.collate
+            self.predict_dataset, batch_size=1, collate_fn=self.predict_dataset.collate
         )

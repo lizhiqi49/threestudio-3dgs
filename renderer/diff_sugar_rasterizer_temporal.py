@@ -23,6 +23,37 @@ from ..geometry.dynamic_sugar import DynamicSuGaRModel
 def basicfunction(x):
     return torch.exp(-1*x.pow(2))
 
+class Depth2Normal(torch.nn.Module):
+    def __init__(self, *args, **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.delzdelxkernel = torch.tensor(
+            [
+                [0.00000, 0.00000, 0.00000],
+                [-1.00000, 0.00000, 1.00000],
+                [0.00000, 0.00000, 0.00000],
+            ]
+        )
+        self.delzdelykernel = torch.tensor(
+            [
+                [0.00000, -1.00000, 0.00000],
+                [0.00000, 0.00000, 0.00000],
+                [0.0000, 1.00000, 0.00000],
+            ]
+        )
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+        delzdelxkernel = self.delzdelxkernel.view(1, 1, 3, 3).to(x.device)
+        delzdelx = F.conv2d(
+            x.reshape(B * C, 1, H, W), delzdelxkernel, padding=1
+        ).reshape(B, C, H, W)
+        delzdelykernel = self.delzdelykernel.view(1, 1, 3, 3).to(x.device)
+        delzdely = F.conv2d(
+            x.reshape(B * C, 1, H, W), delzdelykernel, padding=1
+        ).reshape(B, C, H, W)
+        normal = -torch.cross(delzdelx, delzdely, dim=1)
+        return normal
+
 @threestudio.register("diff-sugar-rasterizer-temporal")
 class DiffGaussian(Rasterizer, GaussianBatchRenderer):
     @dataclass
@@ -43,6 +74,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             "[Note] Gaussian Splatting doesn't support material and background now."
         )
         super().configure(geometry, material, background)
+        self.normal_module = Depth2Normal()
         self.background_tensor = torch.tensor(
             self.cfg.back_ground_color, dtype=torch.float32, device="cuda"
         )
@@ -53,6 +85,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         bg_color: torch.Tensor,
         scaling_modifier=1.0,
         override_color=None,
+        compute_normal_from_dist=True,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -111,7 +144,8 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         # means3D = pc.get_xyz
         means2D = screenspace_points
         
-        means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_all(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
+        # means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_all(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
+        means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_gs_all_single_time(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
         
         shs = None
         cov3D_precomp = None
@@ -128,10 +162,24 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             cov3D_precomp=cov3D_precomp,
         )
 
+        if compute_normal_from_dist:
+            batch_idx = kwargs["batch_idx"]
+            rays_d = kwargs["rays_d"][batch_idx]
+            rays_o = kwargs["rays_o"][batch_idx]
+            xyz_map = rays_o + rendered_depth.permute(1, 2, 0) * rays_d
+            normal_from_dist = self.normal_module(xyz_map.permute(2, 0, 1).unsqueeze(0))[0]
+            normal_from_dist = F.normalize(normal_from_dist, dim=0)
+            normal_from_dist[:2] = - normal_from_dist[:2] 
+            normal_map_from_dist = normal_from_dist * 0.5 * rendered_alpha + 0.5
+        else:
+            normal_from_dist = None
+            normal_map_from_dist = None
+
+
         point_normals = pc.get_timed_gs_normals(
             viewpoint_camera.timestamp[None], viewpoint_camera.frame_idx[None]
         )[0]
-        normal_map, _, _, _ = rasterizer(
+        normal, _, _, _ = rasterizer(
             means3D=means3D,
             means2D=torch.zeros_like(means2D),
             shs=None,
@@ -141,13 +189,18 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             rotations=rotations,
             cov3D_precomp=cov3D_precomp,
         )
-        normal_map = F.normalize(normal_map, dim=0)
+        normal = F.normalize(normal, dim=0)
 
-        normal_map = normal_map * 0.5 * rendered_alpha + 0.5
+        normal_map = normal * 0.5 * rendered_alpha + 0.5
         mask = rendered_alpha > 0.99
         normal_mask = mask.repeat(3, 1, 1)
+        normal[~normal_mask] = normal[~normal_mask].detach()
         normal_map[~normal_mask] = normal_map[~normal_mask].detach()
         rendered_depth[~mask] = rendered_depth[~mask].detach()
+
+        if compute_normal_from_dist:
+            normal_from_dist[~normal_mask] = normal_from_dist[~normal_mask].detach()
+            normal_map_from_dist[~normal_mask] = normal_map_from_dist[~normal_mask].detach()
 
         # Retain gradients of the 2D (screen-space) means for batch dim
         if self.training:
@@ -158,9 +211,12 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         return {
             "render": rendered_image.clamp(0, 1),
             "normal": normal_map,
+            "normal_from_dist": normal_map_from_dist,
             "depth": rendered_depth,
             "mask": rendered_alpha,
             "viewspace_points": screenspace_points,
             "visibility_filter": radii > 0,
             "radii": radii,
+            "raw_normal": normal,
+            "raw_normal_from_dist": normal_from_dist,
         }

@@ -23,14 +23,16 @@ class ARAPCoach:
     ):
         self.verts = verts
         self.faces = faces
+        self.device = device
         self.n_verts = len(verts)
         self.n_faces = len(faces)
         self.one_ring_neighbors = self.get_one_ring_neighbors(self.faces)
         self.max_n_neighbors = max(map(len, self.one_ring_neighbors.values()))
-
-        self.device = device
-
         self._indices_for_nfmt = self.get_indices()
+        self.edge_cot_weights = self.produce_cot_weights_nfmt(self.verts, sparse=False)
+        self.edge_matrix_nfmt = self.produce_edge_matrix_nfmt(self.verts)
+
+
 
     @classmethod
     def get_one_ring_neighbors(cls, faces) -> Dict[Int, List[Int]]:
@@ -100,16 +102,16 @@ class ARAPCoach:
             jj = faces[:, [2, 0, 1]]
             idx = np.stack([ii, jj], axis=0).reshape(2, F * 3)
             idx = torch.as_tensor(idx, dtype=torch.long, device=self.device)
-            w = torch.sparse.FloatTensor(idx, cot.view(-1), (V, V))
+            w = torch.sparse.FloatTensor(idx, cot.flatten(), (V, V))
             w += w.t()
             W = w
         else:
-            i = faces[:, [0, 1, 2]].view(-1)  # flattened tensor of by face, v0, v1, v2
-            j = faces[:, [1, 2, 0]].view(-1)  # flattened tensor of by face, v1, v2, v0
+            i = faces[:, [0, 1, 2]].flatten()  # flattened tensor of by face, v0, v1, v2
+            j = faces[:, [1, 2, 0]].flatten() # flattened tensor of by face, v1, v2, v0
 
             # flatten cot, such that the following line sets
             # w_ij = 0.5 * cot a_ij
-            W[i, j] = 0.5 * cot.view(-1)
+            W[i, j] = 0.5 * cot.flatten()
             # to include b_ij, simply add the transpose to itself
             W = W + W.T
 
@@ -145,37 +147,38 @@ class ARAPCoach:
 
     def compute_arap_energy(
         self,
-        xyz: Float[Tensor, "N_verts 3"],
         xyz_prime: Float[Tensor, "N_verts 3"],
-        edge_weights: Float[Tensor, "N_verts N_max_neighbor"] = None,
+        vert_rotations: Float[Tensor, "N_verts 3 3"] = None,
     ):
-        if edge_weights is None:
-            w = self.produce_cot_weights_nfmt(self.one_ring_neighbors, xyz)
-        else:
-            w = edge_weights
+        xyz = self.verts
 
-        P = self.produce_edge_matrix_nfmt(xyz)
+        w = self.edge_cot_weights
+
+        P = self.edge_matrix_nfmt
         P_prime = self.produce_edge_matrix_nfmt(xyz_prime)
 
-        ### Calculate covariance matrix in bulk
-        D = torch.diag_embed(w, dim1=1, dim2=2)
-        S = torch.bmm(P.permute(0, 2, 1), torch.bmm(D, P_prime))
+        if vert_rotations is None:
+            ### Calculate covariance matrix in bulk
+            D = torch.diag_embed(w, dim1=1, dim2=2)
+            S = torch.bmm(P.permute(0, 2, 1), torch.bmm(D, P_prime))
 
-        ## in the case of no deflection, set S = 0, such that R = I. This is to avoid numerical errors
-        unchanged_verts = torch.unique(torch.where((P == P_prime).all(dim=1))[0])  # any verts which are undeformed
-        S[unchanged_verts] = 0
+            ## in the case of no deflection, set S = 0, such that R = I. This is to avoid numerical errors
+            unchanged_verts = torch.unique(torch.where((P == P_prime).all(dim=1))[0])  # any verts which are undeformed
+            S[unchanged_verts] = 0
 
-        U, sig, W = batch_svd(S)
-        R = torch.bmm(W, U.permute(0, 2, 1))  # compute rotations
+            U, sig, W = batch_svd(S)
+            R = torch.bmm(W, U.permute(0, 2, 1))  # compute rotations
 
-        # Need to flip the column of U corresponding to smallest singular value
-        # for any det(Ri) <= 0
-        entries_to_flip = torch.nonzero(torch.det(R) <= 0, as_tuple=False).flatten()  # idxs where det(R) <= 0
-        if len(entries_to_flip) > 0:
-            Umod = U.clone()
-            cols_to_flip = torch.argmin(sig[entries_to_flip], dim=1)  # Get minimum singular value for each entry
-            Umod[entries_to_flip, :, cols_to_flip] *= -1  # flip cols
-            R[entries_to_flip] = torch.bmm(W[entries_to_flip], Umod[entries_to_flip].permute(0, 2, 1))
+            # Need to flip the column of U corresponding to smallest singular value
+            # for any det(Ri) <= 0
+            entries_to_flip = torch.nonzero(torch.det(R) <= 0, as_tuple=False).flatten()  # idxs where det(R) <= 0
+            if len(entries_to_flip) > 0:
+                Umod = U.clone()
+                cols_to_flip = torch.argmin(sig[entries_to_flip], dim=1)  # Get minimum singular value for each entry
+                Umod[entries_to_flip, :, cols_to_flip] *= -1  # flip cols
+                R[entries_to_flip] = torch.bmm(W[entries_to_flip], Umod[entries_to_flip].permute(0, 2, 1))
+        else:
+            R = vert_rotations
 
         # Compute energy
         rot_rigid = torch.bmm(R, P.permute(0, 2, 1)).permute(0, 2, 1)

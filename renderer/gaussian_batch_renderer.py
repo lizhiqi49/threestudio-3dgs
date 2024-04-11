@@ -13,6 +13,7 @@ class GaussianBatchRenderer:
         visibility_filters = []
         radiis = []
         normals = []
+        normals_from_dist = []
         pred_normals = []
         depths = []
         masks = []
@@ -58,6 +59,11 @@ class GaussianBatchRenderer:
                 if render_pkg.__contains__("normal"):
                     normals.append(render_pkg["normal"])
                 if (
+                    render_pkg.__contains__("normal_from_dist")
+                    and render_pkg["normal_from_dist"] is not None
+                ):
+                    normals_from_dist.append(render_pkg["normal_from_dist"])
+                if (
                     render_pkg.__contains__("pred_normal")
                     and render_pkg["pred_normal"] is not None
                 ):
@@ -79,6 +85,12 @@ class GaussianBatchRenderer:
             outputs.update(
                 {
                     "comp_normal": torch.stack(normals, dim=0).permute(0, 2, 3, 1),
+                }
+            )
+        if len(normals_from_dist) > 0:
+            outputs.update(
+                {
+                    "comp_normal_from_dist": torch.stack(normals_from_dist, dim=0).permute(0, 2, 3, 1),
                 }
             )
         if len(pred_normals) > 0:

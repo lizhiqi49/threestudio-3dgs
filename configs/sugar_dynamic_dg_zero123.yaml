@@ -57,23 +57,25 @@ system:
     num_frames: 32
     use_spline: true
     use_deform_graph: true
+    dynamic_mode: deformation # (deformation / discrete)
 
     n_dg_nodes: 1000
     dg_node_connectivity: 16
     # for discrete dynamic mode
     dg_trans_lr: 0.001
     dg_rot_lr: 0.001
-    delta_xyz_lr: 0.001
-    delta_scales_lr: 0.5
+    dg_scale_lr: 0.001
 
-    dynamic_mode: deformation # (deformation / discrete)
+    vert_trans_lr: 0.001
+    vert_rot_lr: 0.001
+    vert_scale_lr: 0.001
 
     # for deformation dynamic mode
-    deformation_lr: 0.00064 # 0.00064
-    grid_lr: 0.0064 # 0.0064
+    deformation_lr: 0.0008 # 0.00064
+    grid_lr: 0.0008 # 0.0064
 
     # dynamic attr
-    d_gs_scale: false
+    d_scale: true
 
     spatial_extent: ${data.default_camera_distance}
     spatial_lr_scale: 1
@@ -81,7 +83,7 @@ system:
     surface_mesh_to_bind_path: ""
     n_gaussians_per_surface_triangle: 6
 
-  exporter_type: "gaussian-mesh-exporter"
+    exporter_type: "gaussian-mesh-exporter"
 
   # renderer_type: "diff-gaussian-rasterizer-spacetime"
   renderer_type: "diff-sugar-rasterizer-temporal"
@@ -139,9 +141,8 @@ system:
   freq:
     ref_only_steps: 0
     guidance_eval: 0
-    inter_frame_reg: 1
+    inter_frame_reg: 0
     milestone_inter_frame_reg: 0
-    reset_arap_weight_matrices: 100
 
   loggers:
     wandb:
@@ -161,14 +162,19 @@ system:
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_normal_consistency: 100. # 10.
+    lambda_normal_depth_consistency: 10.
     lambda_laplacian_smoothing: 0.
     lambda_3d_normal_smooth: 0.
-    lambda_arap_reg: 0.1
+    lambda_arap_reg_key_frame: 1
+    lambda_arap_reg_inter_frame: 1
     lambda_ref_xyz: 0
     # tv losses
     lambda_rgb_tv: 1.
     lambda_depth_tv: 1.
     lambda_normal_tv: 10. # 1.
+    # object centric reg
+    lambda_obj_centric: 0.
+
 
   optimizer:
     name: Adam

@@ -266,7 +266,7 @@ class Spline(nn.Module):
         uuu = uu * u
         oos = 1.0 / 6.0  # one over six
 
-        if name in ["xyz", "scales"]:
+        if name in ["xyz", "scale"]:
             assert ctrl_knots.shape[-1] == 3
             # t coefficients
             coeffs_t = torch.stack([
