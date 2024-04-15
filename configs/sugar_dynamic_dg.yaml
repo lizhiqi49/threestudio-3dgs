@@ -1,15 +1,15 @@
 name: "sugar4d-test"
-tag: "${data.random_camera.height}_${rmspace:${basename:${data.video_frames_dir}},_}"
+tag: "${data.random_camera.height}_${rmspace:${basename:${data.video_frames_dir}}_${system.geometry.dynamic_mode},_}"
 exp_root_dir: "outputs"
 seed: 0
 
 data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
-  video_frames_dir: ./load/animate-anyone-demo-vid
-  video_length: 32
+  video_frames_dir: ./load/dancing_ironman
+  video_length: 99
   norm_timestamp: true
   # num of frames a batch
-  num_frames: 10
+  num_frames: 18
   height: 512
   width: 512
   resolution_milestones: [100]
@@ -22,7 +22,7 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   random_camera: # threestudio/data/uncond.py -> RandomCameraDataModuleConfig
     height: 512
     width: 512
-    batch_size: 2
+    batch_size: 1
     eval_height: 512
     eval_width: 512
     eval_batch_size: 1
@@ -55,25 +55,25 @@ system:
   geometry_type: "dynamic-sugar"
   geometry:
     # num of control knots per points(vertices/deformation nodes)
-    num_frames: 32
+    num_frames: 50
     use_spline: true
     use_deform_graph: true
-    dynamic_mode: deformation # (deformation / discrete)
+    dynamic_mode: discrete # (deformation / discrete)
 
     n_dg_nodes: 1000
     dg_node_connectivity: 16
     # for discrete dynamic mode
-    dg_trans_lr: 0.001
-    dg_rot_lr: 0.001
-    dg_scale_lr: 0.001
+    dg_trans_lr: 0.0005
+    dg_rot_lr: 0.0002
+    dg_scale_lr: 0.0001
 
     vert_trans_lr: 0.001
     vert_rot_lr: 0.001
     vert_scale_lr: 0.001
 
     # for deformation dynamic mode
-    deformation_lr: 0.0008 # 0.00064
-    grid_lr: 0.0008 # 0.0064
+    deformation_lr: [0, 0.0008, 0.0001, 1000] # 0.00064
+    grid_lr: [0, 0.0008, 0.0001, 1000] # 0.0064
 
     # dynamic attr
     d_scale: true
@@ -114,8 +114,8 @@ system:
     cond_azimuth_deg: ${data.default_azimuth_deg}
     cond_camera_distance: ${data.default_camera_distance}
     guidance_scale: 3.0
-    min_step_percent: 0.1  # (start_iter, start_val, end_val, end_iter)
-    max_step_percent: 0.6
+    min_step_percent: 0.02  # (start_iter, start_val, end_val, end_iter)
+    max_step_percent: 0.5
     chunk_size: null
 
   prompt_processor_2d_type: "stable-diffusion-prompt-processor"

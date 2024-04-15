@@ -169,7 +169,6 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             xyz_map = rays_o + rendered_depth.permute(1, 2, 0) * rays_d
             normal_from_dist = self.normal_module(xyz_map.permute(2, 0, 1).unsqueeze(0))[0]
             normal_from_dist = F.normalize(normal_from_dist, dim=0)
-            normal_from_dist[:2] = - normal_from_dist[:2] 
             normal_map_from_dist = normal_from_dist * 0.5 * rendered_alpha + 0.5
         else:
             normal_from_dist = None
@@ -190,6 +189,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             cov3D_precomp=cov3D_precomp,
         )
         normal = F.normalize(normal, dim=0)
+        normal[:2] = - normal[:2] # due to the coordinate difference between p3d and threestudio
 
         normal_map = normal * 0.5 * rendered_alpha + 0.5
         mask = rendered_alpha > 0.99

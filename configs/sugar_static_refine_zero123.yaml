@@ -11,21 +11,21 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   resolution_milestones: [200, 300]
   default_elevation_deg: 5.0
   default_azimuth_deg: 0.0
-  default_camera_distance: 2.0
-  default_fovy_deg: 49.1
+  default_camera_distance: 3.8
+  default_fovy_deg: 20.0
   requires_depth: ${cmaxgt0orcmaxgt0:${system.loss.lambda_depth},${system.loss.lambda_depth_rel}}
   requires_normal: ${cmaxgt0:${system.loss.lambda_normal}}
   random_camera: # threestudio/data/uncond.py -> RandomCameraDataModuleConfig
     height: 512
     width: 512
-    batch_size: 16
+    batch_size: 4
     eval_height: 512
     eval_width: 512
     eval_batch_size: 1
     elevation_range: [-10, 80]
     azimuth_range: [-180, 180]
-    camera_distance_range: [1.5, 2.5]
-    fovy_range: [49.1, 49.1] # Zero123 has fixed fovy
+    camera_distance_range: [3.8, 3.8]
+    fovy_range: [20.0, 20.0] # Zero123 has fixed fovy
     progressive_until: 0
     camera_perturb: 0.0
     center_perturb: 0.0
@@ -39,6 +39,7 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
     batch_uniform_azimuth: False
     n_val_views: 30
     n_test_views: 120
+    rays_d_normalize: false
 
 system_type: "sugar-static-system"
 system:
@@ -50,7 +51,7 @@ system:
     position_lr: [0, 0.00048, 0.0000016, 3000]
     scaling_lr: 0.005
     feature_lr: 0.001
-    opacity_lr: 0.05
+    opacity_lr: 0.02
     rotation_lr: 0.001
 
     spatial_extent: ${data.default_camera_distance}
@@ -78,16 +79,16 @@ system:
     pretrained_model_name_or_path: ""
     prompt: ""
 
-  guidance_type: "zero123-guidance"
+  guidance_type: "stable-zero123-guidance"
   guidance:
     pretrained_config: "./load/zero123/sd-objaverse-finetune-c_concat-256.yaml"
-    pretrained_model_name_or_path: "/run/determined/workdir/data/huggingface_models/zero123/zero123-xl.ckpt"
+    pretrained_model_name_or_path: "/home/lzq/workspace/huggingface_models/zero123/stable_zero123.ckpt"
     vram_O: ${not:${gt0:${system.freq.guidance_eval}}}
     cond_image_path: ${data.image_path}
     cond_elevation_deg: ${data.default_elevation_deg}
     cond_azimuth_deg: ${data.default_azimuth_deg}
     cond_camera_distance: ${data.default_camera_distance}
-    guidance_scale: 5.0
+    guidance_scale: 3.5
     min_step_percent: 0.02 # 0.2
     max_step_percent: 0.2 # 0.5
 
@@ -132,7 +133,7 @@ system:
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
 
-    lambda_normal_consistency: 10.
+    lambda_normal_consistency: 100.
     lambda_laplacian_smoothing: 1.
 
     # 2d diffusion guidance
@@ -145,6 +146,7 @@ system:
     lambda_opacity_binary: 1.
     lambda_sugar_density_reg: 1.
     lambda_sugar_sdf_normal_reg: 1.
+    lambda_normal_depth_consistency: 1.
 
     # tv reg
     lambda_rgb_tv: 1.0

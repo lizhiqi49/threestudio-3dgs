@@ -16,9 +16,10 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   requires_depth: ${cmaxgt0orcmaxgt0:${system.loss.lambda_depth},${system.loss.lambda_depth_rel}}
   requires_normal: ${cmaxgt0:${system.loss.lambda_normal}}
   random_camera: # threestudio/data/uncond.py -> RandomCameraDataModuleConfig
-    height: 256
-    width: 256
-    batch_size: 4
+    height: [256, 512]
+    width: [256, 512]
+    resolution_milestones: [300]
+    batch_size: [8, 4]
     eval_height: 512
     eval_width: 512
     eval_batch_size: 1
@@ -39,6 +40,7 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
     batch_uniform_azimuth: False
     n_val_views: 30
     n_test_views: 120
+    rays_d_normalize: false
 
 system_type: "sugar-static-system"
 system:
@@ -51,20 +53,20 @@ system:
 
   geometry_type: "gaussian-splatting"
   geometry:
-    position_lr: [0, 0.001, 0.00002, 1000]
-    scale_lr: [0, 0.01, 0.001, 1000]
+    position_lr: [0, 0.001, 0.00002, 500]
+    scale_lr: 0.005
     feature_lr: 0.01
     opacity_lr: 0.05
-    rotation_lr: 0.001
+    rotation_lr: 0.005
     densification_interval: 100
     prune_interval: 100
     opacity_reset_interval: 100000
     densify_from_iter: 0
-    densify_until_iter: ${system.freq.start_sugar_reg} # ${trainer.max_steps}
+    densify_until_iter: ${system.freq.milestone_sugar_reg} # ${trainer.max_steps}
     prune_from_iter: 0
-    prune_until_iter: ${system.freq.start_sugar_reg} # ${trainer.max_steps}
+    prune_until_iter: ${system.freq.milestone_sugar_reg} # ${trainer.max_steps}
     prune_big_points: true
-    densify_grad_threshold: 0.01
+    densify_grad_threshold: 0.05
     min_opac_prune: 0.005
     split_thresh: 0.02
     radii2d_thresh: 1000
@@ -99,15 +101,15 @@ system:
   guidance_type: "stable-zero123-guidance"
   guidance:
     pretrained_config: "./load/zero123/sd-objaverse-finetune-c_concat-256.yaml"
-    pretrained_model_name_or_path: "/home/lzq/workspace/huggingface_models/zero123/zero123-guidance.ckpt"
+    pretrained_model_name_or_path: "/home/lzq/workspace/huggingface_models/zero123/stable_zero123.ckpt"
     vram_O: ${not:${gt0:${system.freq.guidance_eval}}}
     cond_image_path: ${data.image_path}
     cond_elevation_deg: ${data.default_elevation_deg}
     cond_azimuth_deg: ${data.default_azimuth_deg}
     cond_camera_distance: ${data.default_camera_distance}
     guidance_scale: 3.0
-    min_step_percent: [50, 0.7, 0.3, 200]  # (start_iter, start_val, end_val, end_iter)
-    max_step_percent: [50, 0.98, 0.8, 200]
+    min_step_percent: [50, 0.7, 0.02, 1000]  # (start_iter, start_val, end_val, end_iter)
+    max_step_percent: [50, 0.98, 0.25, 1000]
 
   prompt_processor_2d_type: "deep-floyd-prompt-processor"
   prompt_processor_2d:
@@ -123,15 +125,16 @@ system:
   guidance_2d:
     pretrained_model_name_or_path: "/home/lzq/workspace/huggingface_models/DeepFloyd--IF-I-XL-v1.0"
     guidance_scale: 20
-    min_step_percent: [0, 0.5, 0.02, 500]
-    max_step_percent: [0, 0.98, 0.5, 500]
+    min_step_percent: [0, 0.7, 0.02, 1000]
+    max_step_percent: [0, 0.98, 0.4, 1000]
     # grad_clip: 1.0
 
   freq:
     ref_only_steps: 0
     guidance_eval: 0
-    input_normal: 2
-    start_sugar_reg: 3000
+    input_normal: 1
+    milestone_sugar_reg: 3000
+    milestone_2d_sds: 1000
     reset_neighbors: 100
 
   loggers:
@@ -142,27 +145,27 @@ system:
 
   loss:
     lambda_sds: 0.1
-    lambda_sds_2d: 0.05
-    lambda_rgb: [100, 500., 1000., 400]
-    lambda_mask: 50.
+    lambda_sds_2d: 0.01 # 0.05
+    lambda_rgb: [100, 500., 1000., 1000] # [100, 500., 1000., 400]
+    lambda_mask: 1000.
     lambda_depth: 0. # 0.05
     lambda_depth_rel: 0. # [0, 0, 0.05, 100]
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
 
-    lambda_normal_consistency: 10.
-    lambda_laplacian_smoothing: 1.
+    lambda_normal_consistency: 0. # 10.
+    lambda_laplacian_smoothing: 0. # 1.
 
     # For sugar
-    lambda_opacity_binary: [2000, 10., 10., 3000]
-    lambda_sugar_density_reg: [3000, 1., 1., 8000]
-    lambda_sugar_sdf_normal_reg: [3000, 10., 10., 8000]
+    lambda_opacity_binary: [3000, 0.1, 10., 3001]
+    lambda_sugar_density_reg: 1.
+    lambda_sugar_sdf_normal_reg: 10.
 
     # tv reg
     lambda_rgb_tv: 1.0
-    lambda_normal_tv: 1.0
-    lambda_depth_tv: 1.0
+    lambda_normal_tv: 10.
+    lambda_depth_tv: 10.
 
   optimizer:
     name: Adam
@@ -176,7 +179,7 @@ system:
 
 
 trainer:
-  max_steps: 2000
+  max_steps: 5000
   log_every_n_steps: 1
   num_sanity_val_steps: 0
   val_check_interval: 100

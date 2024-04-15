@@ -202,6 +202,8 @@ class TemporalStableZero123Guidance(BaseObject):
         c_concat = []
         for i in range(self.num_frames):
             image_path = os.path.join(video_dir, f"{i:03}_rgba.png")
+            if not os.path.exists(image_path):
+                image_path = os.path.join(video_dir, f"{i}.png")
             outs = self.prepare_embeddings(image_path)
             rgb_256.append(outs[0])
             c_crossattn.append(outs[1])

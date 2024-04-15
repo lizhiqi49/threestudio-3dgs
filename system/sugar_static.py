@@ -125,7 +125,7 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
 
     def on_train_batch_start(self, batch, batch_idx, unused=0):
         super().on_train_batch_start(batch, batch_idx, unused)
-        if self.stage == "gaussain" and self.cfg.use_sugar_reg and self.global_step >= self.cfg.freq.start_sugar_reg:
+        if self.stage == "gaussain" and self.cfg.use_sugar_reg and self.global_step >= self.cfg.freq.milestone_sugar_reg:
             self.sugar_reg = SuGaRRegularizer(
                 self.geometry, keep_track_of_knn=True, knn_to_track=self.cfg.knn_to_track
             )
@@ -228,7 +228,7 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
             set_loss("sds", guidance_out["loss_sds"])
 
             # 2d diffusion guidance
-            if self.guidance_2d is not None:
+            if self.guidance_2d is not None and self.global_step >= self.cfg.freq.milestone_2d_sds:
                 if self.global_step % self.cfg.freq.input_normal == 0:
                     guidance_2d_inp = out["comp_normal"]
                 else:
@@ -301,6 +301,16 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
                         "opacity_max",
                         (self.geometry.get_opacity - 1).abs().mean()
                     )
+
+                if self.C(self.cfg.loss.lambda_normal_depth_consistency) > 0:
+                    if "comp_normal_from_dist" not in out:
+                        raise ValueError(
+                            "comp_normal_from_dist is required for normal-depth consistency loss!"
+                        )
+                    raw_normal = out["comp_normal"] * 2 - 1
+                    raw_normal_from_dist = out["comp_normal_from_dist"] * 2 - 1
+                    loss_normal_depth_consistency = F.mse_loss(raw_normal, raw_normal_from_dist)
+                    set_loss("normal_depth_consistency", loss_normal_depth_consistency)
 
             if self.cfg.loss["lambda_rgb_tv"] > 0.0:
                 loss_rgb_tv = tv_loss(out["comp_rgb"].permute(0, 3, 1, 2))
@@ -423,12 +433,12 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
             + (
                 [
                     {
-                        "type": "grayscale",
-                        "img": out["comp_depth"][0, :, :, 0],
-                        "kwargs": {"cmap": "jet", "data_range": (0, 1)},
+                        "type": "rgb",
+                        "img": out["comp_normal_from_dist"][0],
+                        "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
                     }
                 ]
-                if "comp_depth" in out
+                if "comp_normal_from_dist" in out
                 else []
             )
             + (

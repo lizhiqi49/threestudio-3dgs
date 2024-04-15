@@ -83,6 +83,7 @@ class DiffSuGaR(Rasterizer, GaussianBatchRenderer):
         bg_color: torch.Tensor,
         scaling_modifier=1.0,
         override_color=None,
+        compute_normal_from_dist=True,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -164,11 +165,21 @@ class DiffSuGaR(Rasterizer, GaussianBatchRenderer):
             cov3D_precomp=cov3D_precomp,
         )
         _, H, W = rendered_image.shape
-        
-        # normal_map = self.normal_module(xyz_map.permute(2, 0, 1).unsqueeze(0))[0]
-        # normal_map = F.normalize(normal_map, dim=0)
+
+        if compute_normal_from_dist:
+            batch_idx = kwargs["batch_idx"]
+            rays_d = kwargs["rays_d"][batch_idx]
+            rays_o = kwargs["rays_o"][batch_idx]
+            xyz_map = rays_o + rendered_depth.permute(1, 2, 0) * rays_d
+            normal_from_dist = self.normal_module(xyz_map.permute(2, 0, 1).unsqueeze(0))[0]
+            normal_from_dist = F.normalize(normal_from_dist, dim=0)
+            normal_map_from_dist = normal_from_dist * 0.5 * rendered_alpha + 0.5
+        else:
+            normal_from_dist = None
+            normal_map_from_dist = None
+
         point_normals = pc.get_gs_normals
-        normal_map, _, _, _ = rasterizer(
+        normal, _, _, _ = rasterizer(
             means3D=means3D,
             means2D=torch.zeros_like(means2D),
             shs=None,
@@ -178,13 +189,18 @@ class DiffSuGaR(Rasterizer, GaussianBatchRenderer):
             rotations=rotations,
             cov3D_precomp=cov3D_precomp,
         )
-        normal_map = F.normalize(normal_map, dim=0)
+        normal = F.normalize(normal, dim=0)
+        normal[:2] = - normal[:2] # due to the coordinate difference between p3d and threestudio
 
-        normal_map = normal_map * 0.5 * rendered_alpha + 0.5
+        normal_map = normal * 0.5 * rendered_alpha + 0.5
         mask = rendered_alpha > 0.99
         normal_mask = mask.repeat(3, 1, 1)
         normal_map[~normal_mask] = normal_map[~normal_mask].detach()
         rendered_depth[~mask] = rendered_depth[~mask].detach()
+
+        if compute_normal_from_dist:
+            normal_from_dist[~normal_mask] = normal_from_dist[~normal_mask].detach()
+            normal_map_from_dist[~normal_mask] = normal_map_from_dist[~normal_mask].detach()
 
         # Retain gradients of the 2D (screen-space) means for batch dim
         if self.training:
@@ -195,10 +211,13 @@ class DiffSuGaR(Rasterizer, GaussianBatchRenderer):
         return {
             "render": rendered_image.clamp(0, 1),
             "normal": normal_map,
+            "normal_from_dist": normal_map_from_dist,
             # "pred_normal": pred_normal_map,
             "mask": rendered_alpha,
             "depth": rendered_depth,
             "viewspace_points": screenspace_points,
             "visibility_filter": radii > 0,
             "radii": radii,
+            "raw_normal": normal,
+            "raw_normal_from_dist": normal_from_dist,
         }

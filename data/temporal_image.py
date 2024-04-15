@@ -258,8 +258,12 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         # self.video_length = len(all_frame_paths)
 
         for idx in range(self.video_length):
-            frame_path = os.path.join(self.cfg.video_frames_dir, f"{idx:03}_rgba.png")
-            self.load_single_frame(frame_path)
+            try:
+                frame_path = os.path.join(self.cfg.video_frames_dir, f"{idx:03}_rgba.png")
+                self.load_single_frame(frame_path)
+            except:
+                frame_path = os.path.join(self.cfg.video_frames_dir, f"{idx}.png")
+                self.load_single_frame(frame_path)
 
         self.rgbs = torch.cat(self.rgbs, dim=0)
         self.masks = torch.cat(self.masks, dim=0)
