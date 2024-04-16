@@ -25,6 +25,10 @@ from ..geometry.gaussian_base import BasicPointCloud, Camera
 from ..geometry.dynamic_sugar import DynamicSuGaRModel
 from ..utils.arap_utils import ARAPCoach
 
+from torchmetrics import PeakSignalNoiseRatio
+import torchvision
+
+
 @threestudio.register("sugar-4dgen-system")
 class SuGaR4DGen(BaseLift3DSystem):
     @dataclass
@@ -66,6 +70,7 @@ class SuGaR4DGen(BaseLift3DSystem):
         super().configure()
         self.automatic_optimization = True
         self.stage = self.cfg.stage
+        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
 
     def configure_optimizers(self):
         optim = self.geometry.optimizer
@@ -187,6 +192,9 @@ class SuGaR4DGen(BaseLift3DSystem):
             set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"] * gt_mask.float()))
             # mask loss
             set_loss("mask", F.mse_loss(gt_mask.float(), out["comp_mask"]))
+
+            ref_psnr = self.psnr(gt_rgb, out["comp_rgb"])
+            self.log(f"metric/PSNR", ref_psnr)
 
             # depth loss
             if self.C(self.cfg.loss.lambda_depth) > 0:
@@ -310,7 +318,8 @@ class SuGaR4DGen(BaseLift3DSystem):
 
         if self.stage == "motion":
             # ARAP regularization
-            if guidance == "ref" and self.C(self.cfg.loss.lambda_arap_reg_key_frame) > 0 and self.arap_coach is not None:
+            if guidance == "ref" and self.C(
+                self.cfg.loss.lambda_arap_reg_key_frame) > 0 and self.arap_coach is not None:
                 set_loss(
                     "arap_reg_key_frame",
                     self._compute_arap_energy(batch.get("timestamp"), batch.get("frame_indices"))
@@ -408,7 +417,6 @@ class SuGaR4DGen(BaseLift3DSystem):
                 xyz_prime=vert_timed_xyz[i], vert_rotations=vert_timed_rot[i]
             )
         return loss_arap
-
 
     def on_train_batch_start(self, batch, batch_idx, unused=0):
         super().on_train_batch_start(batch, batch_idx, unused)

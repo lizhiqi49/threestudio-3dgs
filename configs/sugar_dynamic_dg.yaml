@@ -6,10 +6,10 @@ seed: 0
 data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   video_frames_dir: ./load/dancing_ironman
-  video_length: 99
+  video_length: 32
   norm_timestamp: true
   # num of frames a batch
-  num_frames: 18
+  num_frames: 8
   height: 512
   width: 512
   resolution_milestones: [100]
@@ -20,9 +20,9 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   requires_depth: ${cmaxgt0orcmaxgt0:${system.loss.lambda_depth},${system.loss.lambda_depth_rel}}
   requires_normal: ${cmaxgt0:${system.loss.lambda_normal}}
   random_camera: # threestudio/data/uncond.py -> RandomCameraDataModuleConfig
-    height: 512
-    width: 512
-    batch_size: 1
+    height: 256 # 512
+    width: 256 # 512
+    batch_size: 2
     eval_height: 512
     eval_width: 512
     eval_batch_size: 1
@@ -55,7 +55,7 @@ system:
   geometry_type: "dynamic-sugar"
   geometry:
     # num of control knots per points(vertices/deformation nodes)
-    num_frames: 50
+    num_frames: 20 # 50
     use_spline: true
     use_deform_graph: true
     dynamic_mode: discrete # (deformation / discrete)
@@ -191,7 +191,7 @@ trainer:
   max_steps: 5000
   log_every_n_steps: 1
   num_sanity_val_steps: 0
-  val_check_interval: 100
+  val_check_interval: 1
   enable_progress_bar: true
   precision: 32
 
