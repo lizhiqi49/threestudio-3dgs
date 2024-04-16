@@ -66,6 +66,8 @@ class DynamicSuGaRModel(SuGaRModel):
         d_opacity: bool = False
         d_scale: bool = True
 
+        interp_degree: int = 3
+
     cfg: Config
 
     def configure(self) -> None:
@@ -84,7 +86,7 @@ class DynamicSuGaRModel(SuGaRModel):
         self.dynamic_mode = self.cfg.dynamic_mode
 
         if self.cfg.use_spline:
-            self.init_cubic_spliner()
+            self.init_cubic_spliner(interp_degree=self.cfg.interp_degree)
 
         if self.cfg.use_deform_graph:
             self.build_deformation_graph(self.cfg.n_dg_nodes, self.cfg.dg_node_connectivity)
@@ -340,13 +342,13 @@ class DynamicSuGaRModel(SuGaRModel):
         )
 
     # ===================== Spline utils ===================== #
-    def init_cubic_spliner(self):
+    def init_cubic_spliner(self, interp_degree=3):
         n_ctrl_knots = self.num_frames
         # 32 points have 31 intervals, and 29 intervals for 0~1 time, 2 intervals for start_time~0 and 1~endtime(for interpolate first and last keyframes)
         # So the control knots timestamps are different from keyframes
         t_interv = torch.as_tensor(1 / (n_ctrl_knots - 3)).cuda()  # exclude start and end point
         spline_cfg = SplineConfig(
-            degree=3,
+            degree=interp_degree,
             sampling_interval=t_interv,
             start_time=-t_interv,
             n_knots=self.num_frames
