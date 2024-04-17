@@ -159,7 +159,7 @@ system:
     lambda_sds_vid: 0
     lambda_rgb: 1000.
     lambda_mask: 1000.
-    lambda_depth: 0. # 0.05
+    lambda_depth: 0.05 # 0.05
     lambda_depth_rel: 0. # [0, 0, 0.05, 100]
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.

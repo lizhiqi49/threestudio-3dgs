@@ -8,6 +8,7 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 import torch.nn.functional as F
+from PIL import Image
 from torch.utils.data import DataLoader, Dataset, IterableDataset
 
 import threestudio
@@ -25,7 +26,7 @@ from threestudio.utils.ops import (
 from threestudio.utils.typing import *
 
 from threestudio.data.image import (
-    SingleImageDataModuleConfig, 
+    SingleImageDataModuleConfig,
     SingleImageIterableDataset,
     SingleImageDataset,
 )
@@ -35,9 +36,9 @@ from .uncond import (
     RandomCameraIterableDataset,
 )
 
-@dataclass 
+@dataclass
 class TemporalRandomImageDataModuleConfig(SingleImageDataModuleConfig):
-    video_frames_dir: Optional[str] = None 
+    video_frames_dir: Optional[str] = None
     video_length: int = 14
     num_frames: int = 14
     norm_timestamp: bool = False
@@ -208,7 +209,10 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         if self.cfg.requires_depth:
             depth_path = frame_path.replace("_rgba.png", "_depth.png")
             assert os.path.exists(depth_path)
-            depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+            # depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+            depth = cv2.imread(depth_path, cv2.IMREAD_GRAYSCALE)
+            # pil_image = Image.fromarray(depth)
+            # pil_image.show()
             depth = cv2.resize(
                 depth, (self.width, self.height), interpolation=cv2.INTER_AREA
             )
@@ -244,7 +248,7 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         else:
             normal = None
 
-    
+
     def load_video_frames(self):
         assert os.path.exists(self.cfg.video_frames_dir), f"Could not find image {self.cfg.video_frames_dir}!"
         self.rgbs = []
@@ -312,7 +316,7 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
             batch["random_camera"] = batch_rand_cam
 
         return batch
-    
+
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
         size_ind = bisect.bisect_right(self.resolution_milestones, global_step) - 1
         self.height = self.heights[size_ind]

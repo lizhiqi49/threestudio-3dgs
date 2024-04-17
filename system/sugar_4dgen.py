@@ -189,7 +189,7 @@ class SuGaR4DGen(BaseLift3DSystem):
 
             # color loss
             gt_rgb = gt_rgb * gt_mask.float()
-            set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"] * gt_mask.float()))
+            set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"]))
             # mask loss
             set_loss("mask", F.mse_loss(gt_mask.float(), out["comp_mask"]))
 
@@ -199,6 +199,7 @@ class SuGaR4DGen(BaseLift3DSystem):
             # depth loss
             if self.C(self.cfg.loss.lambda_depth) > 0:
                 valid_gt_depth = batch["ref_depth"][gt_mask.squeeze(-1)].unsqueeze(1)
+                # problem with mask and gt depth channel
                 valid_pred_depth = out["comp_depth"][gt_mask].unsqueeze(1)
                 with torch.no_grad():
                     A = torch.cat(
