@@ -2,7 +2,7 @@ import bisect
 import math
 import os
 from dataclasses import dataclass, field
-
+from PIL import Image
 import cv2
 import numpy as np
 import pytorch_lightning as pl
@@ -200,6 +200,12 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
             rgb[~mask[..., 0], :] = 1.0
         self.rgbs.append(rgb)
         self.masks.append(mask)
+        
+        # filename = os.path.basename(frame_path)
+        # maskname = filename.replace(".png", "_mask.png")
+        # Image.fromarray((rgb[0].cpu().numpy() * 255.).astype(np.uint8)).save(f".cache/{filename}")
+        # Image.fromarray(mask.squeeze().cpu().numpy()).save(f".cache/{maskname}")
+
         print(
             f"[INFO] single image dataset: load image {frame_path} {rgb.shape}"
         )

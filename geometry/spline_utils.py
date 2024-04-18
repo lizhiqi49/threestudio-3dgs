@@ -298,6 +298,7 @@ class Spline(nn.Module):
             ], dim=-3)  # (*batch_size, num_ctrl_knots=4, interpolations, 4)
             q_t = pp.cumprod(q_ts, dim=-3, left=False)[..., -1, :, :]
             ret = q_t.squeeze(-2)
+            # ret = ret / ret.norm(dim=-1, keepdim=True)
 
         return ret
 

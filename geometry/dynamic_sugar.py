@@ -31,6 +31,7 @@ from .gaussian_base import SH2RGB, RGB2SH
 from .sugar import SuGaRModel
 from .deformation import DeformationNetwork, ModelHiddenParams
 from .spline_utils import Spline, SplineConfig
+from ..utils.dual_quaternions import DualQuaternion
 # import pygeodesic
 # import pygeodesic.geodesic as geodesic
 
@@ -65,6 +66,8 @@ class DynamicSuGaRModel(SuGaRModel):
         d_rotation: bool = True
         d_opacity: bool = False
         d_scale: bool = True
+
+        skinning_method: str = "dqs"    # "lbs(linear blending skinning)" of "dqs(dual-quaternion skinning)"
 
     cfg: Config
 
@@ -467,7 +470,7 @@ class DynamicSuGaRModel(SuGaRModel):
                 d_scale = d_scale.reshape(num_t, num_pts, 3)
             if d_opacity is not None:
                 d_opacity = d_opacity.reshape(num_t, num_pts, 1)
-
+        rot = rot / rot.norm(dim=-1, keepdim=True)
         attrs = {
             "xyz": trans, "rotation": pp.SO3(rot), "scale": d_scale
         }
@@ -514,19 +517,34 @@ class DynamicSuGaRModel(SuGaRModel):
         neighbor_nodes_rots = dg_node_rots[:, self._xyz_neighbor_node_idx]
 
         # deform vertex xyz
-        num_pts = self.get_xyz_verts.shape[0]
-        dists_vec: Float[Tensor, "N_t N_p N_n 3 1"]
-        dists_vec = (self.get_xyz_verts.unsqueeze(1) - neighbor_nodes_xyz).unsqueeze(-1)
-        dists_vec = torch.stack([dists_vec] * n_t, dim=0)
+        if self.cfg.skinning_method == "lbs":
+            num_pts = self.get_xyz_verts.shape[0]
+            dists_vec: Float[Tensor, "N_t N_p N_n 3 1"]
+            dists_vec = (self.get_xyz_verts.unsqueeze(1) - neighbor_nodes_xyz).unsqueeze(-1)
+            dists_vec = torch.stack([dists_vec] * n_t, dim=0)
 
-        deformed_vert_xyz: Float[Tensor, "N_t N_p 3"]
-        deformed_xyz = torch.bmm(
-            neighbor_nodes_rots.matrix().reshape(-1, 3, 3), dists_vec.reshape(-1, 3, 1)
-        ).squeeze(-1).reshape(n_t, num_pts, -1, 3)
-        deformed_xyz = deformed_xyz + neighbor_nodes_xyz.unsqueeze(0) + neighbor_nodes_trans
+            deformed_vert_xyz: Float[Tensor, "N_t N_p 3"]
+            deformed_xyz = torch.bmm(
+                neighbor_nodes_rots.matrix().reshape(-1, 3, 3), dists_vec.reshape(-1, 3, 1)
+            ).squeeze(-1).reshape(n_t, num_pts, -1, 3)
+            deformed_xyz = deformed_xyz + neighbor_nodes_xyz.unsqueeze(0) + neighbor_nodes_trans
 
-        nn_weights = self._xyz_neighbor_nodes_weights[None, :, :, None]
-        deformed_vert_xyz = (nn_weights * deformed_xyz).sum(dim=2)
+            nn_weights = self._xyz_neighbor_nodes_weights[None, :, :, None]
+            deformed_vert_xyz = (nn_weights * deformed_xyz).sum(dim=2)
+        elif self.cfg.skinning_method == "dqs":
+            dual_quat = DualQuaternion.from_quat_pose_array(
+                torch.cat([neighbor_nodes_rots.tensor(), neighbor_nodes_trans], dim=-1)
+            )
+            q_real: Float[Tensor, "N_t N_p N_n 4"] = dual_quat.q_r.tensor()
+            q_dual: Float[Tensor, "N_t N_p N_n 4"] = dual_quat.q_d.tensor()
+            nn_weights = self._xyz_neighbor_nodes_weights[None, :, :, None]
+            weighted_sum_q_real: Float[Tensor, "N_t N_p 4"] = (q_real * nn_weights).sum(dim=-2)
+            weighted_sum_q_dual: Float[Tensor, "N_t N_p 4"] = (q_dual * nn_weights).sum(dim=-2)
+            weighted_sum_dual_quat = DualQuaternion.from_dq_array(
+                torch.cat([weighted_sum_q_real, weighted_sum_q_dual], dim=-1)
+            )
+            dq_normalized = weighted_sum_dual_quat.normalized()
+            deformed_vert_xyz = dq_normalized.transform_point_simple(self.get_xyz_verts)
 
         # deform vertex rotation
         deformed_vert_rots: Float[pp.LieTensor, "N_t N_p 4"]
@@ -534,6 +552,7 @@ class DynamicSuGaRModel(SuGaRModel):
             self._xyz_neighbor_nodes_weights[None, ..., None] * neighbor_nodes_rots.Log()
         ).sum(dim=-2)
         deformed_vert_rots = pp.so3(deformed_vert_rots).Exp()
+        # deformed_vert_rots = pp.SO3(deformed_vert_rots / deformed_vert_rots.norm(dim=-1, keepdim=True))
 
         outs = {"xyz": deformed_vert_xyz, "rotation": deformed_vert_rots}
 
@@ -586,7 +605,7 @@ class DynamicSuGaRModel(SuGaRModel):
                 d_scale = d_scale.reshape(num_t, num_pts, 3)
             if d_opacity is not None:
                 d_opacity = d_opacity.reshape(num_t, num_pts, 1)
-
+        # rot = rot / rot.norm(dim=-1, keepdim=True)
         attrs = {
             "xyz": trans, "rotation": pp.SO3(rot), "scale": d_scale
         }
