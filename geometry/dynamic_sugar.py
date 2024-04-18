@@ -68,6 +68,8 @@ class DynamicSuGaRModel(SuGaRModel):
 
         interp_degree: int = 3
 
+        dist_mode: str = 'eucdisc'
+
     cfg: Config
 
     def configure(self) -> None:
@@ -89,7 +91,7 @@ class DynamicSuGaRModel(SuGaRModel):
             self.init_cubic_spliner(interp_degree=self.cfg.interp_degree)
 
         if self.cfg.use_deform_graph:
-            self.build_deformation_graph(self.cfg.n_dg_nodes, self.cfg.dg_node_connectivity)
+            self.build_deformation_graph(self.cfg.n_dg_nodes, self.cfg.dg_node_connectivity, self.cfg.dist_mode)
             self.vert_rots_q = None
 
         if self.dynamic_mode == "discrete":

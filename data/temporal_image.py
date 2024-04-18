@@ -209,10 +209,10 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         if self.cfg.requires_depth:
             depth_path = frame_path.replace("_rgba.png", "_depth.png")
             assert os.path.exists(depth_path)
-            # depth = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+            depth_rgb = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
             depth = cv2.imread(depth_path, cv2.IMREAD_GRAYSCALE)
-            # pil_image = Image.fromarray(depth)
-            # pil_image.show()
+            pil_image = Image.fromarray(depth)
+            pil_image.show()
             depth = cv2.resize(
                 depth, (self.width, self.height), interpolation=cv2.INTER_AREA
             )

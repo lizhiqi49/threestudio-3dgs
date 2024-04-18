@@ -85,6 +85,8 @@ system:
     surface_mesh_to_bind_path: ""
     n_gaussians_per_surface_triangle: 6
 
+    dist_mode: "eucdisc" # (eucdisc / geodisc)
+
   exporter_type: "gaussian-mesh-exporter"
 
   # renderer_type: "diff-gaussian-rasterizer-spacetime"
@@ -161,7 +163,7 @@ system:
     lambda_mask: 1000.
     lambda_depth: 0.05 # 0.05
     lambda_depth_rel: 0. # [0, 0, 0.05, 100]
-    lambda_normal: 0. # [0, 0, 0.05, 100]
+    lambda_normal: 0.5 # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_normal_consistency: 100. # 10.
     lambda_normal_depth_consistency: 10.

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict
 
 import numpy as np
+from PIL import Image
 from easydict import EasyDict
 
 import threestudio
@@ -525,7 +526,8 @@ class SuGaR4DGen(BaseLift3DSystem):
                 ]
                 if "comp_normal_from_dist" in out
                 else []
-            ),
+            )
+            ,
             # claforte: TODO: don't hardcode the frame numbers to record... read them from cfg instead.
             name=f"validation_step_batchidx_{batch_idx}"
             if batch_idx in [0, 7, 15, 23, 29]
@@ -661,7 +663,30 @@ class SuGaR4DGen(BaseLift3DSystem):
                 ]
                 if "comp_normal" in out
                 else []
-            ),
+            )
+            + (
+                [
+                    {
+                        "type": "grayscale",
+                        "img": batch["depth"][0],
+                        "kwargs": {},
+                    }
+                ]
+                if "depth" in batch
+                else []
+            )
+            + (
+                [
+                    {
+                        "type": "grayscale",
+                        "img": out["comp_depth"][0],
+                        "kwargs": {},
+                    }
+                ]
+                if "comp_depth" in out
+                else []
+            )
+            ,
             name="test_step",
             step=self.true_global_step,
         )
@@ -671,6 +696,15 @@ class SuGaR4DGen(BaseLift3DSystem):
 
             self.batch_ref_eval["timestamp"] = batch["timestamp"]
             out_ref = self(self.batch_ref_eval)
+
+            # debug
+            # depth = out_ref["comp_depth"][0]
+            # depth_array = self.convert_data(depth.reshape(*depth.shape[:2]))
+            # depth_array = (depth_array - depth_array.min()) / (depth_array.max() - depth_array.min())
+            # depth_array = (depth_array * 255.0).astype(np.uint8)
+            # pil_img = Image.fromarray(depth_array, mode='L')
+            # pil_img.show()
+
             self.save_image_grid(
                 f"it{self.true_global_step}-test-ref/{batch['index'][0]}.png",
                 (
@@ -701,7 +735,30 @@ class SuGaR4DGen(BaseLift3DSystem):
                     ]
                     if "comp_normal" in out_ref
                     else []
-                ),
+                )
+                + (
+                    [
+                        {
+                            "type": "grayscale",
+                            "img": batch["depth"][0],
+                            "kwargs": {},
+                        }
+                    ]
+                    if "depth" in batch
+                    else []
+                )
+                + (
+                    [
+                        {
+                            "type": "grayscale",
+                            "img": out_ref["comp_depth"][0],
+                            "kwargs": {},
+                        }
+                    ]
+                    if "comp_depth" in out_ref
+                    else []
+                )
+                ,
                 name=f"test-step-ref",
                 step=self.true_global_step,
             )

@@ -18,7 +18,7 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   random_camera: # threestudio/data/uncond.py -> RandomCameraDataModuleConfig
     height: 512
     width: 512
-    batch_size: 1
+    batch_size: 4
     eval_height: 512
     eval_width: 512
     eval_batch_size: 1
@@ -131,6 +131,7 @@ system:
     lambda_normal: 0. # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_3d_normal_smooth: 0.
+    lambda_normal_depth_consistency: 0.
 
     lambda_normal_consistency: 10.
     lambda_laplacian_smoothing: 1.

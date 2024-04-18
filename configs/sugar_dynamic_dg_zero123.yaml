@@ -85,6 +85,8 @@ system:
     surface_mesh_to_bind_path: ""
     n_gaussians_per_surface_triangle: 6
 
+    dist_mode: "eucdisc" # (eucdisc / geodisc)
+
   exporter_type: "gaussian-mesh-exporter"
 
   # renderer_type: "diff-gaussian-rasterizer-spacetime"
