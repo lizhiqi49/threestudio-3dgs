@@ -774,9 +774,10 @@ class DynamicSuGaRModel(SuGaRModel):
 
                 xyz_neighbor_nodes_weights.append(
                     torch.from_numpy(
-                        np.exp(
-                            - (np.linalg.norm(vertices[i] - downpcd_points[k_n_neighbor], axis=1) + 1e-5) ** 2 / 2
-                        )
+                        # np.exp(
+                        #     - (np.linalg.norm(vertices[i] - downpcd_points[k_n_neighbor], axis=1) + 1e-5) ** 2 / 2
+                        # )
+                        np.linalg.norm(vertices[i] - downpcd_points[k_n_neighbor], axis=1) ** 2
                     ).float().to(device)
                 )
         else:
@@ -791,7 +792,7 @@ class DynamicSuGaRModel(SuGaRModel):
         self._xyz_neighbor_nodes_weights = torch.stack(xyz_neighbor_nodes_weights).to(device)
         # a = torch.sum(self._xyz_neighbor_nodes_weights < 0)
         # self._xyz_neighbor_nodes_weights[self._xyz_neighbor_nodes_weights < 0] = 0
-        # self._xyz_neighbor_nodes_weights = torch.sqrt(self._xyz_neighbor_nodes_weights)
+        self._xyz_neighbor_nodes_weights = torch.sqrt(self._xyz_neighbor_nodes_weights)
         # normalize
         self._xyz_neighbor_nodes_weights = (self._xyz_neighbor_nodes_weights
                                             / self._xyz_neighbor_nodes_weights.sum(dim=-1, keepdim=True)
