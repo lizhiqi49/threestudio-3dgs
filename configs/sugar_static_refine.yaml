@@ -47,7 +47,7 @@ system:
 
   geometry_type: "sugar"
   geometry:
-    position_lr: [0, 0.00048, 0.0000016, 3000]
+    position_lr: 0.00048 # [0, 0.00048, 0.0000016, 3000]
     scaling_lr: 0.005
     feature_lr: 0.001
     opacity_lr: 0.05
@@ -61,6 +61,8 @@ system:
     surface_mesh_to_bind_path: "outputs/sugar-mesh/feeding_squirrel/simplified_mesh.ply"
 
     init_gs_opacity: 0.9
+
+    init_gs_scales_s: 1.7
 
   renderer_type: "diff-sugar-rasterizer-normal"
   renderer:
@@ -166,7 +168,7 @@ system:
 
 
 trainer:
-  max_steps: 1000
+  max_steps: 2000
   log_every_n_steps: 1
   num_sanity_val_steps: 0
   val_check_interval: 100
