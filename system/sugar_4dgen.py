@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict
 
 import numpy as np
+from PIL import Image
 from easydict import EasyDict
 
 import threestudio
@@ -24,6 +25,10 @@ from pytorch3d.loss import mesh_normal_consistency, mesh_laplacian_smoothing
 from ..geometry.gaussian_base import BasicPointCloud, Camera
 from ..geometry.dynamic_sugar import DynamicSuGaRModel
 from ..utils.arap_utils import ARAPCoach
+
+from torchmetrics import PeakSignalNoiseRatio
+import torchvision
+
 
 @threestudio.register("sugar-4dgen-system")
 class SuGaR4DGen(BaseLift3DSystem):
@@ -66,6 +71,7 @@ class SuGaR4DGen(BaseLift3DSystem):
         super().configure()
         self.automatic_optimization = True
         self.stage = self.cfg.stage
+        self.psnr = PeakSignalNoiseRatio(data_range=1.0)
 
     def configure_optimizers(self):
         optim = self.geometry.optimizer
@@ -184,13 +190,17 @@ class SuGaR4DGen(BaseLift3DSystem):
 
             # color loss
             gt_rgb = gt_rgb * gt_mask.float()
-            set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"] * gt_mask.float()))
+            set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"]))
             # mask loss
             set_loss("mask", F.mse_loss(gt_mask.float(), out["comp_mask"]))
+
+            ref_psnr = self.psnr(gt_rgb, out["comp_rgb"])
+            self.log(f"metric/PSNR", ref_psnr)
 
             # depth loss
             if self.C(self.cfg.loss.lambda_depth) > 0:
                 valid_gt_depth = batch["ref_depth"][gt_mask.squeeze(-1)].unsqueeze(1)
+                # problem with mask and gt depth channel
                 valid_pred_depth = out["comp_depth"][gt_mask].unsqueeze(1)
                 with torch.no_grad():
                     A = torch.cat(
@@ -310,7 +320,8 @@ class SuGaR4DGen(BaseLift3DSystem):
 
         if self.stage == "motion":
             # ARAP regularization
-            if guidance == "ref" and self.C(self.cfg.loss.lambda_arap_reg_key_frame) > 0 and self.arap_coach is not None:
+            if guidance == "ref" and self.C(
+                self.cfg.loss.lambda_arap_reg_key_frame) > 0 and self.arap_coach is not None:
                 set_loss(
                     "arap_reg_key_frame",
                     self._compute_arap_energy(batch.get("timestamp"), batch.get("frame_indices"))
@@ -408,7 +419,6 @@ class SuGaR4DGen(BaseLift3DSystem):
                 xyz_prime=vert_timed_xyz[i], vert_rotations=vert_timed_rot[i]
             )
         return loss_arap
-
 
     def on_train_batch_start(self, batch, batch_idx, unused=0):
         super().on_train_batch_start(batch, batch_idx, unused)
@@ -516,7 +526,8 @@ class SuGaR4DGen(BaseLift3DSystem):
                 ]
                 if "comp_normal_from_dist" in out
                 else []
-            ),
+            )
+            ,
             # claforte: TODO: don't hardcode the frame numbers to record... read them from cfg instead.
             name=f"validation_step_batchidx_{batch_idx}"
             if batch_idx in [0, 7, 15, 23, 29]
@@ -652,7 +663,30 @@ class SuGaR4DGen(BaseLift3DSystem):
                 ]
                 if "comp_normal" in out
                 else []
-            ),
+            )
+            + (
+                [
+                    {
+                        "type": "grayscale",
+                        "img": batch["depth"][0],
+                        "kwargs": {},
+                    }
+                ]
+                if "depth" in batch
+                else []
+            )
+            + (
+                [
+                    {
+                        "type": "grayscale",
+                        "img": out["comp_depth"][0],
+                        "kwargs": {},
+                    }
+                ]
+                if "comp_depth" in out
+                else []
+            )
+            ,
             name="test_step",
             step=self.true_global_step,
         )
@@ -662,6 +696,15 @@ class SuGaR4DGen(BaseLift3DSystem):
 
             self.batch_ref_eval["timestamp"] = batch["timestamp"]
             out_ref = self(self.batch_ref_eval)
+
+            # debug
+            # depth = out_ref["comp_depth"][0]
+            # depth_array = self.convert_data(depth.reshape(*depth.shape[:2]))
+            # depth_array = (depth_array - depth_array.min()) / (depth_array.max() - depth_array.min())
+            # depth_array = (depth_array * 255.0).astype(np.uint8)
+            # pil_img = Image.fromarray(depth_array, mode='L')
+            # pil_img.show()
+
             self.save_image_grid(
                 f"it{self.true_global_step}-test-ref/{batch['index'][0]}.png",
                 (
@@ -692,7 +735,30 @@ class SuGaR4DGen(BaseLift3DSystem):
                     ]
                     if "comp_normal" in out_ref
                     else []
-                ),
+                )
+                + (
+                    [
+                        {
+                            "type": "grayscale",
+                            "img": batch["depth"][0],
+                            "kwargs": {},
+                        }
+                    ]
+                    if "depth" in batch
+                    else []
+                )
+                + (
+                    [
+                        {
+                            "type": "grayscale",
+                            "img": out_ref["comp_depth"][0],
+                            "kwargs": {},
+                        }
+                    ]
+                    if "comp_depth" in out_ref
+                    else []
+                )
+                ,
                 name=f"test-step-ref",
                 step=self.true_global_step,
             )

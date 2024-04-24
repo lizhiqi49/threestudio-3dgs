@@ -95,7 +95,9 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         """
 
         if self.training:
-            invert_bg_color = np.random.rand() > self.cfg.invert_bg_prob
+            # debug
+            invert_bg_color = True
+            # invert_bg_color = np.random.rand() > self.cfg.invert_bg_prob
         else:
             invert_bg_color = True
 
@@ -143,13 +145,13 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
 
         # means3D = pc.get_xyz
         means2D = screenspace_points
-        
+
         # means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_all(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
         means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_gs_all_single_time(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
-        
+
         shs = None
         cov3D_precomp = None
-        
+
         # Rasterize visible Gaussians to image, obtain their radii (on screen).
         rendered_image, radii, rendered_depth, rendered_alpha = rasterizer(
             means3D=means3D,
@@ -189,7 +191,9 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             cov3D_precomp=cov3D_precomp,
         )
         normal = F.normalize(normal, dim=0)
-        normal[:2] = - normal[:2] # due to the coordinate difference between p3d and threestudio
+
+        # when using mesh extracted by sugar, the directions of faces' normal is inward-pointing
+        normal = - normal
 
         normal_map = normal * 0.5 * rendered_alpha + 0.5
         mask = rendered_alpha > 0.99

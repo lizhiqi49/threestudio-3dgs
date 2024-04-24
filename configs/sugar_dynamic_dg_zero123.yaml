@@ -57,6 +57,7 @@ system:
     # num of control knots per points(vertices/deformation nodes)
     num_frames: 32
     use_spline: true
+    interp_degree: 1
     use_deform_graph: true
     dynamic_mode: deformation # (deformation / discrete)
 
@@ -83,6 +84,8 @@ system:
 
     surface_mesh_to_bind_path: ""
     n_gaussians_per_surface_triangle: 6
+
+    dist_mode: "eucdisc" # (eucdisc / geodisc)
 
   exporter_type: "gaussian-mesh-exporter"
 

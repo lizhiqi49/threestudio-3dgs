@@ -246,6 +246,35 @@ class Spline(nn.Module):
         else:
             assert_never(self.cfg.degree)
 
+    def linear_interpolation(
+        self,
+        ctrl_knots: Float[Tensor, "N 2 n_feature"],
+        u: Float[Tensor, "N 1"],
+        name: str,
+        enable_eps: bool = False
+    ):
+        N = ctrl_knots.shape[0]  # (N_pts,)
+        interpolations = u.shape[-1]
+        # If u only has one dim, broadcast it to all batches. This means same interpolations for all batches.
+        # Otherwise, u should have the same batch size as the control knots (*batch_size, interpolations).
+        if u.dim() == 1:
+            u = u.tile((N, 1))  # (*batch_size, interpolations)
+        if enable_eps:
+            u = torch.clip(u, _EPS, 1.0 - _EPS)
+
+        if name in ["xyz", "scale"]:
+            assert ctrl_knots.shape[-1] == 3
+            # linear interpolation
+            ret = torch.lerp(ctrl_knots[:, 0], ctrl_knots[:, 1], u)
+        elif name == "rotation":
+            assert ctrl_knots.shape[-1] == 4
+            ctrl_knots_so3 = ctrl_knots.Log()
+            # linear interpolation
+            ret_so3 = torch.lerp(ctrl_knots_so3[:, 0], ctrl_knots_so3[:, 1], u)
+            ret = pp.Exp(pp.so3(ret_so3))
+
+        return ret
+
     def cubic_bspline_interpolation(
         self,
         ctrl_knots: Float[Tensor, "N 4 n_feature"],

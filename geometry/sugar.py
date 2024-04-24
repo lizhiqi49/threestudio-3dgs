@@ -74,6 +74,8 @@ class SuGaRModel(BaseGeometry):
 
         pred_normal: bool = False
 
+        init_gs_scales_s: float = 1.7
+
     cfg: Config
 
     def configure(self, o3d_mesh=None) -> None:
@@ -244,7 +246,7 @@ class SuGaRModel(BaseGeometry):
 
     def set_surface_triangle_bary_coords(self, n_gaussians_per_surface_triangle: int) -> None:
         if n_gaussians_per_surface_triangle == 1:
-            self.surface_triangle_circle_radius = 1. / 2. / np.sqrt(3.)
+            self.surface_triangle_circle_radius = 1. / 2. / np.sqrt(3.) * self.cfg.init_gs_scales_s
             self.surface_triangle_bary_coords = torch.tensor(
                 [[1 / 3, 1 / 3, 1 / 3]],
                 dtype=torch.float32,
@@ -252,7 +254,7 @@ class SuGaRModel(BaseGeometry):
             )[..., None]
 
         if n_gaussians_per_surface_triangle == 3:
-            self.surface_triangle_circle_radius = 1. / 2. / (np.sqrt(3.) + 1.)
+            self.surface_triangle_circle_radius = 1. / 2. / (np.sqrt(3.) + 1.) * self.cfg.init_gs_scales_s
             self.surface_triangle_bary_coords = torch.tensor(
                 [[1 / 2, 1 / 4, 1 / 4],
                  [1 / 4, 1 / 2, 1 / 4],
@@ -262,7 +264,7 @@ class SuGaRModel(BaseGeometry):
             )[..., None]
 
         if n_gaussians_per_surface_triangle == 4:
-            self.surface_triangle_circle_radius = 1 / (4. * np.sqrt(3.))
+            self.surface_triangle_circle_radius = 1 / (4. * np.sqrt(3.)) * self.cfg.init_gs_scales_s
             self.surface_triangle_bary_coords = torch.tensor(
                 [[1 / 3, 1 / 3, 1 / 3],
                  [2 / 3, 1 / 6, 1 / 6],
@@ -273,7 +275,7 @@ class SuGaRModel(BaseGeometry):
             )[..., None]  # n_gaussians_per_face, 3, 1
 
         if n_gaussians_per_surface_triangle == 6:
-            self.surface_triangle_circle_radius = 1 / (4. + 2. * np.sqrt(3.))
+            self.surface_triangle_circle_radius = 1 / (4. + 2. * np.sqrt(3.)) * self.cfg.init_gs_scales_s
             self.surface_triangle_bary_coords = torch.tensor(
                 [[2 / 3, 1 / 6, 1 / 6],
                  [1 / 6, 2 / 3, 1 / 6],
