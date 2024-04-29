@@ -27,7 +27,7 @@ from pytorch3d.transforms import quaternion_apply, quaternion_invert, matrix_to_
 from pytorch3d.structures import Meshes
 from pytorch3d.renderer import TexturesUV, TexturesVertex
 
-from .gaussian_base import SH2RGB, RGB2SH
+from .gaussian_base import SH2RGB, RGB2SH, GaussianBaseModel
 from .sugar import SuGaRModel
 from .deformation import DeformationNetwork, ModelHiddenParams
 from .spline_utils import Spline, SplineConfig
@@ -69,7 +69,11 @@ class DynamicSuGaRModel(SuGaRModel):
 
         interp_degree: int = 3
         dist_mode: str = 'eucdisc'
-        skinning_method: str = "dqs"    # "lbs(linear blending skinning)" of "dqs(dual-quaternion skinning)"
+        skinning_method: str = "lbs"    # "lbs"(linear blending skinning) or "dqs"(dual-quaternion skinning) or "hybrid"
+
+        # ============== Maybe use sparse gaussians ============== #
+        dg_node_as_sparse_gs: bool = True
+        pretrained_static_sparse_gs_ckpt_path: str = ""
 
 
     cfg: Config
@@ -93,8 +97,22 @@ class DynamicSuGaRModel(SuGaRModel):
             self.init_cubic_spliner(interp_degree=self.cfg.interp_degree)
 
         if self.cfg.use_deform_graph:
-            self.build_deformation_graph(self.cfg.n_dg_nodes, self.cfg.dg_node_connectivity, self.cfg.dist_mode)
-            self.vert_rots_q = None
+            if self.cfg.dg_node_as_sparse_gs:
+                self.sparse_gs = threestudio.find("gaussian-splatting")({})
+                self.sparse_gs.load_ply(self.cfg.pretrained_static_sparse_gs_ckpt_path)
+                self.sparse_gs.training_setup()
+                self.sparse_gs.update_learning_rate(0)
+                for p in self.sparse_gs.parameters():
+                    p.requires_grad_(False)
+            else:
+                self.sparse_gs = None
+
+            self.build_deformation_graph(
+                self.cfg.n_dg_nodes, 
+                xyz_nodes=self.sparse_gs._xyz if self.sparse_gs is not None else None,
+                nodes_connectivity=self.cfg.dg_node_connectivity, 
+                mode=self.cfg.dist_mode
+            )
 
         if self.dynamic_mode == "discrete":
             # xyz
@@ -111,6 +129,13 @@ class DynamicSuGaRModel(SuGaRModel):
                     )
                 else:
                     self._dg_node_scales = None
+
+                if self.cfg.skinning_method == "hybrid":
+                    self._dg_node_lbs_weights = nn.Parameter(
+                        torch.zeros((self.num_frames, self.cfg.n_dg_nodes, 1), device="cuda"), reuqires_grad=True
+                    )
+                else:
+                    self._dg_node_lbs_weights = None
 
             else:
                 self._vert_trans = nn.Parameter(
@@ -427,11 +452,24 @@ class DynamicSuGaRModel(SuGaRModel):
         timestamp: Float[Tensor, "N_t"] = None,
         frame_idx: Int[Tensor, "N_t"] = None,
     ) -> Dict[str, Union[Float[Tensor, "N_t N_p C"], pp.LieTensor]]:
+        if self._have_comp_dg_attrs_this_step:
+            return self.dg_timed_attrs
+        else:
+            return self._get_timed_dg_attributes(timestamp, frame_idx)
+    
+    def _get_timed_dg_attributes(
+        self,
+        timestamp: Float[Tensor, "N_t"] = None,
+        frame_idx: Int[Tensor, "N_t"] = None,
+    ) -> Dict[str, Union[Float[Tensor, "N_t N_p C"], pp.LieTensor]]:
         if self.cfg.use_spline:
             # attrs = self.spline_interp_dg(timestamp)
             attrs = self.spliner(timestamp)
         else:
             attrs = self._get_timed_dg_attributes_wo_spline(timestamp, frame_idx)
+
+        self.dg_timed_attrs = attrs
+        self._have_comp_dg_attrs_this_step = True   # should be set as False in update_step()
         return attrs
 
     # def spline_interp_dg(
@@ -473,7 +511,8 @@ class DynamicSuGaRModel(SuGaRModel):
                 d_scale = d_scale.reshape(num_t, num_pts, 3)
             if d_opacity is not None:
                 d_opacity = d_opacity.reshape(num_t, num_pts, 1)
-        rot = rot / rot.norm(dim=-1, keepdim=True)
+        # rot = rot / rot.norm(dim=-1, keepdim=True)
+        rot = F.normalize(rot, dim=-1)
         attrs = {
             "xyz": trans, "rotation": pp.SO3(rot), "scale": d_scale
         }
@@ -609,10 +648,60 @@ class DynamicSuGaRModel(SuGaRModel):
             if d_opacity is not None:
                 d_opacity = d_opacity.reshape(num_t, num_pts, 1)
         # rot = rot / rot.norm(dim=-1, keepdim=True)
+        rot = F.normalize(rot, dim=-1)
         attrs = {
             "xyz": trans, "rotation": pp.SO3(rot), "scale": d_scale
         }
         return attrs
+    
+    # ========= Compute sparse gaussians' attributes ========= #
+    def get_timed_sparse_gs_attributes(
+        self,
+        timestamp: Float[Tensor, "N_t"] = None,
+        frame_idx: Int[Tensor, "N_t"] = None,
+    ) -> Dict[str, Union[Float[Tensor, "N_t N_p C"], pp.LieTensor]]:
+        self.sparse_gs: GaussianBaseModel
+        dg_node_attrs = self.get_timed_dg_attributes(timestamp, frame_idx)
+        d_trans, d_rots = dg_node_attrs["xyz"], dg_node_attrs["rotation"]
+        if self.cfg.d_scale:
+            d_scale = dg_node_attrs["scale"]
+        else:
+            d_scale = torch.ones_like(d_trans)
+
+        xyz_orig = self.sparse_gs.get_xyz
+        rot_orig = self.sparse_gs.get_rotation
+        scale_orig = self.sparse_gs.get_scaling
+        opacity = self.sparse_gs.get_opacity
+
+        # xyz
+        means3D = xyz_orig * d_scale + d_trans
+        # means3D = torch.einsum("tpij,tpjk->tpik", d_rots.matrix(), (xyz_orig * d_scale).unsqueeze(-1)).squeeze(-1) + d_trans
+        # means3D = torch.bmm(d_rots.matrix(), (xyz_orig * d_scale).unsqueeze(-1)).squeeze(-1) + d_trans
+        # rotation
+        rotations = d_rots * pp.SO3(rot_orig[None, ..., [1, 2, 3, 0]])
+        rotations = self.sparse_gs.rotation_activation(rotations.tensor()[..., [3, 0, 1, 2]])
+        # scale
+        scales = scale_orig[None] * d_scale
+        # opacity
+        opacity = torch.stack([opacity] * means3D.shape[0], dim=0)
+        return {
+            "xyz": means3D, "rotation": rotations, "scale": scales, "opacity": opacity
+        }
+    
+    def get_timed_sparse_gs_all_single_time(self, timestamp=None, frame_idx=None):
+        if timestamp is not None and timestamp.ndim == 0:
+            timestamp = timestamp[None]
+        if frame_idx is not None and frame_idx.ndim == 0:
+            frame_idx = frame_idx[None]
+
+        sparse_gs_timed_attrs = self.get_timed_sparse_gs_attributes(timestamp, frame_idx)
+        means3D = sparse_gs_timed_attrs["xyz"][0]
+        rotations = sparse_gs_timed_attrs["rotation"][0]
+        scales = sparse_gs_timed_attrs["scale"][0]
+        opacity = sparse_gs_timed_attrs["opacity"][0]
+
+        return means3D, scales, rotations, opacity
+
 
     # ========= Compute gaussian kernals' attributes ========= #
     def get_timed_gs_attributes(
@@ -642,7 +731,8 @@ class DynamicSuGaRModel(SuGaRModel):
                 self._scales], dim=-1)
             vert_timed_dscales = vert_attrs["scale"][:, self._gs_vert_connections, :]
             gs_timed_dscale = (self._gs_bary_weights[None] * vert_timed_dscales).sum(dim=-2)
-            gs_timed_scales = gs_scales_orig + gs_timed_dscale
+            # gs_timed_scales = gs_scales_orig + gs_timed_dscale
+            gs_timed_scales = gs_scales_orig * (gs_timed_dscale + 1)
             gs_timed_scales = torch.cat([
                 self.surface_mesh_thickness * torch.ones(*gs_timed_scales.shape[:-1], 1, device=self.device),
                 self.scale_activation(gs_timed_scales[..., 1:])], dim=-1)
@@ -687,15 +777,19 @@ class DynamicSuGaRModel(SuGaRModel):
             raise ValueError("No vertices when with no mesh binded.")
         return points
 
-    def build_deformation_graph(self, n_nodes, nodes_connectivity=6, mode="eucdisc"):
+    def build_deformation_graph(self, n_nodes, xyz_nodes=None, nodes_connectivity=6, mode="geodisc"):
         device = self.device
         xyz_verts = self.get_xyz_verts
         self._xyz_cpu = xyz_verts.cpu().numpy()
         mesh = o3d.io.read_triangle_mesh(self.cfg.surface_mesh_to_bind_path)
-        downpcd = mesh.sample_points_uniformly(number_of_points=n_nodes)
-        # downpcd = mesh.sample_points_poisson_disk(number_of_points=1000, pcl=downpcd)
 
-        # build deformation graph connectivity
+        if xyz_nodes is None:
+            downpcd = mesh.sample_points_uniformly(number_of_points=n_nodes)
+            # downpcd = mesh.sample_points_poisson_disk(number_of_points=1000, pcl=downpcd)
+        else:
+            downpcd = o3d.geometry.PointCloud()
+            downpcd.points = o3d.utility.Vector3dVector(xyz_nodes.cpu().numpy())
+
         downpcd.paint_uniform_color([0.5, 0.5, 0.5])
         self._deform_graph_node_xyz = torch.from_numpy(np.asarray(downpcd.points)).float().to(device)
 
@@ -769,6 +863,10 @@ class DynamicSuGaRModel(SuGaRModel):
                 sorted_index = np.argsort(distances)
 
                 k_n_neighbor = sorted_index[:nodes_connectivity]
+                k_n_plus1_neighbor = sorted_index[:nodes_connectivity+1]
+                vert_to_neighbor_dists = np.linalg.norm(
+                    vertices[i] - downpcd_points[k_n_plus1_neighbor], axis=-1
+                )
 
                 xyz_neighbor_node_idx.append(torch.from_numpy(k_n_neighbor).to(device))
 
@@ -777,7 +875,8 @@ class DynamicSuGaRModel(SuGaRModel):
                         # np.exp(
                         #     - (np.linalg.norm(vertices[i] - downpcd_points[k_n_neighbor], axis=1) + 1e-5) ** 2 / 2
                         # )
-                        np.linalg.norm(vertices[i] - downpcd_points[k_n_neighbor], axis=1) ** 2
+                        # np.linalg.norm(vertices[i] - downpcd_points[k_n_neighbor], axis=1) ** 2
+                        (1 - vert_to_neighbor_dists[:nodes_connectivity] / vert_to_neighbor_dists[-1]) ** 2
                     ).float().to(device)
                 )
         else:
@@ -792,7 +891,7 @@ class DynamicSuGaRModel(SuGaRModel):
         self._xyz_neighbor_nodes_weights = torch.stack(xyz_neighbor_nodes_weights).to(device)
         # a = torch.sum(self._xyz_neighbor_nodes_weights < 0)
         # self._xyz_neighbor_nodes_weights[self._xyz_neighbor_nodes_weights < 0] = 0
-        self._xyz_neighbor_nodes_weights = torch.sqrt(self._xyz_neighbor_nodes_weights)
+        # self._xyz_neighbor_nodes_weights = torch.sqrt(self._xyz_neighbor_nodes_weights)
         # normalize
         self._xyz_neighbor_nodes_weights = (self._xyz_neighbor_nodes_weights
                                             / self._xyz_neighbor_nodes_weights.sum(dim=-1, keepdim=True)
@@ -800,6 +899,10 @@ class DynamicSuGaRModel(SuGaRModel):
 
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
         super().update_step(epoch, global_step, on_load_weights)
+
+        self.dg_timed_attrs = None
+        self._have_comp_dg_attrs_this_step = False
+
         self._deformed_vert_positions = {}
         self._deformed_vert_rotations = {}
 

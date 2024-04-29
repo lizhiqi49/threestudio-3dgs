@@ -245,7 +245,8 @@ class GaussianBaseModel(BaseGeometry, GaussianIO):
         self.opacity_activation = torch.sigmoid
         self.inverse_opacity_activation = inverse_sigmoid
 
-        self.rotation_activation = torch.nn.functional.normalize
+        # self.rotation_activation = torch.nn.functional.normalize
+        self.rotation_activation = lambda x: torch.nn.functional.normalize(x, dim=-1)
 
     def configure(self) -> None:
         super().configure()
