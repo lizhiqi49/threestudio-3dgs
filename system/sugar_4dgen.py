@@ -26,7 +26,8 @@ from ..geometry.gaussian_base import BasicPointCloud, Camera
 from ..geometry.dynamic_sugar import DynamicSuGaRModel
 from ..utils.arap_utils import ARAPCoach
 
-from torchmetrics import PeakSignalNoiseRatio
+from torchmetrics import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
+from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
 import torchvision
 
 
@@ -72,6 +73,8 @@ class SuGaR4DGen(BaseLift3DSystem):
         self.automatic_optimization = True
         self.stage = self.cfg.stage
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
+        self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
+        self.lpips = LearnedPerceptualImagePatchSimilarity(net_type='squeeze')
 
     def configure_optimizers(self):
         optim = self.geometry.optimizer
@@ -194,8 +197,13 @@ class SuGaR4DGen(BaseLift3DSystem):
             # mask loss
             set_loss("mask", F.mse_loss(gt_mask.float(), out["comp_mask"]))
 
-            ref_psnr = self.psnr(gt_rgb, out["comp_rgb"])
+            ref_psnr = self.psnr(out["comp_rgb"], gt_rgb)
+            ref_ssim = self.ssim(out["comp_rgb"], gt_rgb)
+            ref_lpips = self.lpips(out["comp_rgb"], gt_rgb)
+
             self.log(f"metric/PSNR", ref_psnr)
+            self.log(f"metric/SSIM", ref_ssim)
+            self.log(f"metric/LPIPS", ref_lpips)
 
             # depth loss
             if self.C(self.cfg.loss.lambda_depth) > 0:

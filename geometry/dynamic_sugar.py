@@ -212,6 +212,10 @@ class DynamicSuGaRModel(SuGaRModel):
                 }
             ]
 
+
+        # a = self._deformation.get_grid_parameters()
+        # b = self._deformation.get_mlp_parameters()
+
         self.optimize_list = l
         self.optimize_params = [d["name"] for d in l]
         self.optimizer = torch.optim.Adam(l, lr=0.0, eps=1e-15)
