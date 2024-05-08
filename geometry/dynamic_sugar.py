@@ -452,10 +452,38 @@ class DynamicSuGaRModel(SuGaRModel):
         timestamp: Float[Tensor, "N_t"] = None,
         frame_idx: Int[Tensor, "N_t"] = None,
     ) -> Dict[str, Union[Float[Tensor, "N_t N_p C"], pp.LieTensor]]:
-        if self._have_comp_dg_attrs_this_step:
-            return self.dg_timed_attrs
-        else:
-            return self._get_timed_dg_attributes(timestamp, frame_idx)
+        n_t = timestamp.shape[0] if timestamp is not None else frame_idx.shape[0]
+        timed_attr_list = []
+        for i in range(n_t):
+            key_timestamp = timestamp[i].item() if timestamp is not None else 0
+            key_frame = frame_idx[i].float().item() if frame_idx is not None else 0
+            key = key_timestamp + key_frame
+
+            if self.dg_timed_attrs.__contains__(key):
+                attrs = self.dg_timed_attrs[key]
+            else:
+                attrs = self._get_timed_dg_attributes(
+                    timestamp=timestamp[i:i+1] if timestamp is not None else None,
+                    frame_idx=frame_idx[i:i+1] if frame_idx is not None else None,
+                )
+                self.dg_timed_attrs[key] = attrs
+            timed_attr_list.append(attrs)
+
+        timed_attrs = {}
+        timed_attrs["xyz"] = torch.cat(
+            [attr_dict["xyz"] for attr_dict in timed_attr_list], dim=0
+        )
+        timed_attrs["rotation"] = pp.SO3(
+            torch.cat(
+                [attr_dict["rotation"].tensor() for attr_dict in timed_attr_list], 
+                dim=0
+            )
+        )
+        timed_attrs["scale"] = torch.cat(
+            [attr_dict["scale"] for attr_dict in timed_attr_list], dim=0
+        ) if self.cfg.d_scale else None
+
+        return timed_attrs
     
     def _get_timed_dg_attributes(
         self,
@@ -467,9 +495,6 @@ class DynamicSuGaRModel(SuGaRModel):
             attrs = self.spliner(timestamp)
         else:
             attrs = self._get_timed_dg_attributes_wo_spline(timestamp, frame_idx)
-
-        self.dg_timed_attrs = attrs
-        self._have_comp_dg_attrs_this_step = True   # should be set as False in update_step()
         return attrs
 
     # def spline_interp_dg(
@@ -900,8 +925,8 @@ class DynamicSuGaRModel(SuGaRModel):
     def update_step(self, epoch: int, global_step: int, on_load_weights: bool = False):
         super().update_step(epoch, global_step, on_load_weights)
 
-        self.dg_timed_attrs = None
-        self._have_comp_dg_attrs_this_step = False
+        self.dg_timed_attrs = {}
+        # self._have_comp_dg_attrs_this_step = False
 
         self._deformed_vert_positions = {}
         self._deformed_vert_rotations = {}
