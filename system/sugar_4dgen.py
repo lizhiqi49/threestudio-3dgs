@@ -212,12 +212,12 @@ class SuGaR4DGen(BaseLift3DSystem):
             set_loss("mask", F.mse_loss(gt_mask.float(), out["comp_mask"]))
 
             ref_psnr = self.psnr(out["comp_rgb"], gt_rgb)
-            ref_ssim = self.ssim(out["comp_rgb"], gt_rgb)
-            ref_lpips = self.lpips(out["comp_rgb"], gt_rgb)
+            # ref_ssim = self.ssim(out["comp_rgb"], gt_rgb)
+            # ref_lpips = self.lpips(out["comp_rgb"], gt_rgb)
 
             self.log(f"metric/PSNR", ref_psnr)
-            self.log(f"metric/SSIM", ref_ssim)
-            self.log(f"metric/LPIPS", ref_lpips)
+            # self.log(f"metric/SSIM", ref_ssim)
+            # self.log(f"metric/LPIPS", ref_lpips)
 
             if out_sg is not None:
                 set_loss("rgb_sg", F.mse_loss(gt_rgb, out_sg["comp_rgb"]))
