@@ -66,7 +66,7 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         self.rank = get_rank()
         self.cfg: TemporalRandomImageDataModuleConfig = cfg
 
-        assert self.cfg.use_random_camera   # Fix this later
+        assert self.cfg.use_random_camera  # Fix this later
         if self.cfg.use_random_camera:
             random_camera_cfg = parse_structured(
                 RandomCameraDataModuleConfig, self.cfg.get("random_camera", {})
@@ -201,7 +201,7 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
             rgb[~mask[..., 0], :] = 1.0
         self.rgbs.append(rgb)
         self.masks.append(mask)
-        
+
         # filename = os.path.basename(frame_path)
         # maskname = filename.replace(".png", "_mask.png")
         # Image.fromarray((rgb[0].cpu().numpy() * 255.).astype(np.uint8)).save(f".cache/{filename}")
@@ -215,10 +215,12 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         if self.cfg.requires_depth:
             depth_path = frame_path.replace("_rgba.png", "_depth.png")
             assert os.path.exists(depth_path)
-            depth_rgb = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
             depth = cv2.imread(depth_path, cv2.IMREAD_GRAYSCALE)
-            pil_image = Image.fromarray(depth)
-            pil_image.show()
+            # debug
+            # depth_rgb = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+            # pil_image = Image.fromarray(depth)
+            # pil_image.show()
+
             depth = cv2.resize(
                 depth, (self.width, self.height), interpolation=cv2.INTER_AREA
             )
@@ -254,7 +256,6 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         else:
             normal = None
 
-
     def load_video_frames(self):
         assert os.path.exists(self.cfg.video_frames_dir), f"Could not find image {self.cfg.video_frames_dir}!"
         self.rgbs = []
@@ -286,7 +287,6 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
             self.normals = torch.cat(self.normals, dim=0)
         else:
             self.normals = None
-
 
     def get_all_images(self):
         return self.rgbs

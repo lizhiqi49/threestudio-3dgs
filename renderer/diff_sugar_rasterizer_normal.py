@@ -95,7 +95,7 @@ class DiffSuGaR(Rasterizer, GaussianBatchRenderer):
             invert_bg_color = np.random.rand() > self.cfg.invert_bg_prob
         else:
             invert_bg_color = True
-        
+
         bg_color = bg_color if not invert_bg_color else (1.0 - bg_color)
 
         pc: SuGaRModel = self.geometry
@@ -144,6 +144,11 @@ class DiffSuGaR(Rasterizer, GaussianBatchRenderer):
         scales = pc.get_scaling
         rotations = pc.get_rotation
 
+        # debug
+        # print()
+        # print(torch.max(scales[..., 1:]))
+        # print(torch.min(scales[..., 1:]))
+
         # If precomputed colors are provided, use them. Otherwise, if it is desired to precompute colors
         # from SHs in Python, do it. If not, then SH -> RGB conversion will be done by rasterizer.
         shs = None
@@ -190,7 +195,7 @@ class DiffSuGaR(Rasterizer, GaussianBatchRenderer):
             cov3D_precomp=cov3D_precomp,
         )
         normal = F.normalize(normal, dim=0)
-        normal[:2] = - normal[:2] # due to the coordinate difference between p3d and threestudio
+        normal[:2] = - normal[:2]  # due to the coordinate difference between p3d and threestudio
 
         normal_map = normal * 0.5 * rendered_alpha + 0.5
         mask = rendered_alpha > 0.99

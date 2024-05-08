@@ -190,6 +190,10 @@ class SuGaRModel(BaseGeometry):
         #     ).requires_grad_(False)
         # )
         verts = np.array(o3d_mesh.vertices)
+
+        # # debug rotation coordinate
+        # verts = verts @ np.array([[1, 0, 0], [0, 0, 1], [0, -1, 0]]).transpose()
+
         faces = np.array(o3d_mesh.triangles)
         vert_colors = np.array(o3d_mesh.vertex_colors)
         if len(vert_colors) == 0:

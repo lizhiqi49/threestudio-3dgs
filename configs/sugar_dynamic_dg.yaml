@@ -57,7 +57,7 @@ system:
     # num of control knots per points(vertices/deformation nodes)
     num_frames: 32 # 50
     use_spline: true
-    interp_degree: 1
+    interp_degree: 3
     use_deform_graph: true
     dynamic_mode: deformation # (deformation / discrete)
 
