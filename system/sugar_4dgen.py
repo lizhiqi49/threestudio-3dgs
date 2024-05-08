@@ -28,6 +28,7 @@ from ..utils.arap_utils import ARAPCoach
 
 from torchmetrics import PeakSignalNoiseRatio, StructuralSimilarityIndexMeasure
 from torchmetrics.image.lpip import LearnedPerceptualImagePatchSimilarity
+
 import torchvision
 
 
@@ -65,6 +66,10 @@ class SuGaR4DGen(BaseLift3DSystem):
         num_inter_frames: int = 10
         length_inter_frames: float = 0.2
 
+        # === Sparse Gaussians (deformation nodes) optimization == #
+        optimize_sparse_gs: bool = True
+        geometry_sparse_gs: dict = field(default_factory=dict)
+
     cfg: Config
 
     def configure(self):
@@ -75,6 +80,7 @@ class SuGaR4DGen(BaseLift3DSystem):
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
         self.lpips = LearnedPerceptualImagePatchSimilarity(net_type='squeeze')
+
 
     def configure_optimizers(self):
         optim = self.geometry.optimizer
@@ -173,7 +179,15 @@ class SuGaR4DGen(BaseLift3DSystem):
 
         batch["ambient_ratio"] = ambient_ratio
 
+        batch["render_sparse_gs"] = False
         out = self(batch)
+
+        if self.geometry.sparse_gs is not None:
+            batch["render_sparse_gs"] = True
+            out_sg = self.renderer.batch_forward(batch)
+        else:
+            out_sg = None
+
         loss_prefix = f"loss_{guidance}_"
 
         loss_terms = {}
@@ -205,6 +219,10 @@ class SuGaR4DGen(BaseLift3DSystem):
             self.log(f"metric/SSIM", ref_ssim)
             self.log(f"metric/LPIPS", ref_lpips)
 
+            if out_sg is not None:
+                set_loss("rgb_sg", F.mse_loss(gt_rgb, out_sg["comp_rgb"]))
+                set_loss("mask_sg", F.mse_loss(gt_mask.float(), out_sg["comp_mask"]))
+
             # depth loss
             if self.C(self.cfg.loss.lambda_depth) > 0:
                 valid_gt_depth = batch["ref_depth"][gt_mask.squeeze(-1)].unsqueeze(1)
@@ -225,6 +243,11 @@ class SuGaR4DGen(BaseLift3DSystem):
                 set_loss(
                     "depth_rel", 1 - self.pearson(valid_pred_depth, valid_gt_depth)
                 )
+                if out_sg is not None:
+                    valid_pred_depth_sg = out_sg["comp_depth"][gt_mask]
+                    set_loss(
+                        "depth_rel_sg", 1 - self.pearson(valid_pred_depth_sg, valid_gt_depth)
+                    )
 
             # normal loss
             if self.C(self.cfg.loss.lambda_normal) > 0:
@@ -265,8 +288,16 @@ class SuGaR4DGen(BaseLift3DSystem):
                 rgb_as_latents=False,
                 guidance_eval=guidance_eval,
             )
-            # claforte: TODO: rename the loss_terms keys
             set_loss("sds_zero123", guidance_out["loss_sds"])
+
+            if out_sg is not None:
+                guidance_out_sg = self.guidance_zero123(
+                    out_sg["comp_rgb"],
+                    **batch,
+                    rgb_as_latents=False,
+                    guidance_eval=guidance_eval,
+                )
+                set_loss("sds_zero123_sg", guidance_out_sg["loss_sds"])
 
         # Regularization
         if self.C(self.cfg.loss.lambda_normal_smooth) > 0:
@@ -306,7 +337,8 @@ class SuGaR4DGen(BaseLift3DSystem):
                 )
             raw_normal = out["comp_normal"] * 2 - 1
             raw_normal_from_dist = out["comp_normal_from_dist"] * 2 - 1
-            loss_normal_depth_consistency = F.mse_loss(raw_normal, raw_normal_from_dist)
+            # loss_normal_depth_consistency = F.mse_loss(raw_normal, raw_normal_from_dist)
+            loss_normal_depth_consistency = (1 - raw_normal.unsqueeze(-2) @ raw_normal_from_dist.unsqueeze(-1)).mean()
             set_loss("normal_depth_consistency", loss_normal_depth_consistency)
 
         if self.stage != "static" and guidance == "ref" and self.C(self.cfg.loss.lambda_ref_xyz) > 0:
@@ -479,78 +511,9 @@ class SuGaR4DGen(BaseLift3DSystem):
             self.geometry.spliner.update_end_time()
 
     def validation_step(self, batch, batch_idx):
-        if self.stage != "static" and not batch.__contains__("timestamp"):
-            batch.update(
-                {
-                    "timestamp": torch.as_tensor(
-                        [batch["index"] / batch["n_all_views"]], device=self.device
-                    ),
-                    "frame_indices": (
-                        torch.as_tensor([batch_idx], device=self.device)
-                        if self.geometry.num_frames > 1 else
-                        torch.as_tensor([0], device=self.device)
-                    )
-                }
-            )
-        out = self(batch)
-        self.save_image_grid(
-            f"it{self.true_global_step}-val/{batch['index'][0]}.png",
-            (
-                [
-                    {
-                        "type": "rgb",
-                        "img": batch["rgb"][0],
-                        "kwargs": {"data_format": "HWC"},
-                    }
-                ]
-                if "rgb" in batch
-                else []
-            )
-            + [
-                {
-                    "type": "rgb",
-                    "img": out["comp_rgb"][0],
-                    "kwargs": {"data_format": "HWC"},
-                },
-            ]
-            + (
-                [
-                    {
-                        "type": "rgb",
-                        "img": out["comp_normal"][0],
-                        "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
-                    }
-                ]
-                if "comp_normal" in out
-                else []
-            )
-            + (
-                [
-                    {
-                        "type": "rgb",
-                        "img": out["comp_normal_from_dist"][0],
-                        "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
-                    }
-                ]
-                if "comp_normal_from_dist" in out
-                else []
-            )
-            ,
-            # claforte: TODO: don't hardcode the frame numbers to record... read them from cfg instead.
-            name=f"validation_step_batchidx_{batch_idx}"
-            if batch_idx in [0, 7, 15, 23, 29]
-            else None,
-            step=self.true_global_step,
-        )
-
-        if self.stage != "static" and self.geometry.num_frames > 1:
-            if batch["index"] == 0:
-                self.batch_ref_eval = batch
-
-            self.batch_ref_eval["timestamp"] = batch["timestamp"]
-            out_ref = self(self.batch_ref_eval)
+        def save_out_to_image_grid(filename, out):
             self.save_image_grid(
-                f"it{self.true_global_step}-val-ref/{batch['index'][0]}.png",
+                filename,
                 (
                     [
                         {
@@ -565,7 +528,7 @@ class SuGaR4DGen(BaseLift3DSystem):
                 + [
                     {
                         "type": "rgb",
-                        "img": out_ref["comp_rgb"][0],
+                        "img": out["comp_rgb"][0],
                         "kwargs": {"data_format": "HWC"},
                     },
                 ]
@@ -573,30 +536,63 @@ class SuGaR4DGen(BaseLift3DSystem):
                     [
                         {
                             "type": "rgb",
-                            "img": out_ref["comp_normal"][0],
+                            "img": out["comp_normal"][0],
                             "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
                         }
                     ]
-                    if "comp_normal" in out_ref
+                    if "comp_normal" in out
                     else []
                 )
                 + (
                     [
                         {
                             "type": "rgb",
-                            "img": out_ref["comp_normal_from_dist"][0],
+                            "img": out["comp_normal_from_dist"][0],
                             "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
                         }
                     ]
-                    if "comp_normal_from_dist" in out_ref
+                    if "comp_normal_from_dist" in out
                     else []
-                ),
+                )
+                ,
                 # claforte: TODO: don't hardcode the frame numbers to record... read them from cfg instead.
-                name=f"validation_step_batchidx_{batch_idx}-ref"
-                if batch_idx in [0, 7, 15, 23, 29]
-                else None,
+                name=None,
                 step=self.true_global_step,
             )
+
+        if self.stage != "static" and not batch.__contains__("timestamp"):
+            batch.update(
+                {
+                    "timestamp": torch.as_tensor(
+                        [batch["index"] / batch["n_all_views"]], device=self.device
+                    ),
+                    "frame_indices": (
+                        torch.as_tensor([batch_idx], device=self.device)
+                        if self.geometry.num_frames > 1 else
+                        torch.as_tensor([0], device=self.device)
+                    )
+                }
+            )
+        out = self(batch)
+        save_out_to_image_grid(f"it{self.true_global_step}-val/{batch['index'][0]}.png", out)
+
+        if self.geometry.sparse_gs is not None:
+            batch.update({"render_sparse_gs": True})
+            out_sg = self.renderer.batch_forward(batch)
+            save_out_to_image_grid(f"it{self.true_global_step}-val/{batch['index'][0]}_sparse_gs.png", out_sg)
+
+        if self.stage != "static" and self.geometry.num_frames > 1:
+            if batch["index"] == 0:
+                self.batch_ref_eval = batch
+
+            self.batch_ref_eval["timestamp"] = batch["timestamp"]
+            self.batch_ref_eval["render_sparse_gs"] = False
+            out_ref = self(self.batch_ref_eval)
+            save_out_to_image_grid(f"it{self.true_global_step}-val-ref/{batch['index'][0]}.png", out_ref)
+            if self.geometry.sparse_gs is not None:
+                self.batch_ref_eval["render_sparse_gs"] = True
+                out_ref_sg = self.renderer.batch_forward(self.batch_ref_eval)
+                save_out_to_image_grid(f"it{self.true_global_step}-val-ref/{batch['index'][0]}_sparse_gs.png", out_ref_sg)
 
     def on_validation_epoch_end(self):
         filestem = f"it{self.true_global_step}-val"
@@ -609,6 +605,16 @@ class SuGaR4DGen(BaseLift3DSystem):
             name="validation_epoch_end",
             step=self.true_global_step,
         )
+        if self.geometry.sparse_gs is not None:
+            self.save_img_sequence(
+                filestem+"-sparse-gs",
+                filestem,
+                "(\d+)_sparse_gs\.png",
+                save_format="mp4",
+                fps=30,
+                name="validation_epoch_end_gs",
+                step=self.true_global_step,
+            )
         if self.stage != "static":
             filestem = f"it{self.true_global_step}-val-ref"
             self.save_img_sequence(
@@ -620,6 +626,17 @@ class SuGaR4DGen(BaseLift3DSystem):
                 name="validation_epoch_end-ref",
                 step=self.true_global_step,
             )
+            if self.geometry.sparse_gs is not None:
+                self.save_img_sequence(
+                    filestem+"-sparse-gs",
+                    filestem,
+                    "(\d+)_sparse_gs\.png",
+                    save_format="mp4",
+                    fps=30,
+                    name="validation_epoch_end_sg-ref",
+                    step=self.true_global_step,
+                )
+
 
     def on_test_epoch_start(self) -> None:
         if self.geometry.cfg.use_spline:

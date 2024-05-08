@@ -86,6 +86,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         scaling_modifier=1.0,
         override_color=None,
         compute_normal_from_dist=True,
+        render_sparse_gs=False,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -105,18 +106,19 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
 
         pc: DynamicSuGaRModel = self.geometry
         # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
+        pts = pc.sparse_gs.get_xyz if render_sparse_gs else pc.get_xyz
         screenspace_points = (
             torch.zeros_like(
-                pc.get_xyz, dtype=pc.get_xyz.dtype, requires_grad=True, device="cuda"
+                pts, dtype=pts.dtype, requires_grad=True, device="cuda"
             )
             + 0
         )
-        pointtimes = (
-            torch.ones(
-                (pc.get_xyz.shape[0],1), dtype=pc.get_xyz.dtype, requires_grad=False, device="cuda"
-            )
-            + 0
-        )
+        # pointtimes = (
+        #     torch.ones(
+        #         (pc.get_xyz.shape[0],1), dtype=pc.get_xyz.dtype, requires_grad=False, device="cuda"
+        #     )
+        #     + 0
+        # )
         try:
             screenspace_points.retain_grad()
         except:
@@ -146,10 +148,15 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         # means3D = pc.get_xyz
         means2D = screenspace_points
 
+        if render_sparse_gs:
+            means3D, scales, rotations, opacity = pc.get_timed_sparse_gs_all_single_time(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
+            shs = pc.sparse_gs.get_features
+            colors_precomp = None
+        else:
         # means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_all(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
-        means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_gs_all_single_time(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
+            means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_gs_all_single_time(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
+            shs = None
 
-        shs = None
         cov3D_precomp = None
 
         # Rasterize visible Gaussians to image, obtain their radii (on screen).
@@ -164,6 +171,9 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             cov3D_precomp=cov3D_precomp,
         )
 
+        mask = rendered_alpha > 0.99
+        rendered_depth[~mask] = rendered_depth[~mask].detach()
+
         if compute_normal_from_dist:
             batch_idx = kwargs["batch_idx"]
             rays_d = kwargs["rays_d"][batch_idx]
@@ -172,37 +182,38 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             normal_from_dist = self.normal_module(xyz_map.permute(2, 0, 1).unsqueeze(0))[0]
             normal_from_dist = F.normalize(normal_from_dist, dim=0)
             normal_map_from_dist = normal_from_dist * 0.5 * rendered_alpha + 0.5
+            normal_mask = mask.repeat(3, 1, 1)
+            normal_from_dist[~normal_mask] = normal_from_dist[~normal_mask].detach()
+            normal_map_from_dist[~normal_mask] = normal_map_from_dist[~normal_mask].detach()
         else:
             normal_from_dist = None
             normal_map_from_dist = None
 
+        if not render_sparse_gs:
+            point_normals = pc.get_timed_gs_normals(
+                viewpoint_camera.timestamp[None], viewpoint_camera.frame_idx[None]
+            )[0]
+            normal, _, _, _ = rasterizer(
+                means3D=means3D,
+                means2D=torch.zeros_like(means2D),
+                shs=None,
+                colors_precomp=point_normals,
+                opacities=opacity,
+                scales=scales,
+                rotations=rotations,
+                cov3D_precomp=cov3D_precomp,
+            )
+            normal = F.normalize(normal, dim=0)
 
-        point_normals = pc.get_timed_gs_normals(
-            viewpoint_camera.timestamp[None], viewpoint_camera.frame_idx[None]
-        )[0]
-        normal, _, _, _ = rasterizer(
-            means3D=means3D,
-            means2D=torch.zeros_like(means2D),
-            shs=None,
-            colors_precomp=point_normals,
-            opacities=opacity,
-            scales=scales,
-            rotations=rotations,
-            cov3D_precomp=cov3D_precomp,
-        )
-        normal = F.normalize(normal, dim=0)
-        normal[:2] = - normal[:2] # due to the coordinate difference between p3d and threestudio
-
-        normal_map = normal * 0.5 * rendered_alpha + 0.5
-        mask = rendered_alpha > 0.99
-        normal_mask = mask.repeat(3, 1, 1)
-        normal[~normal_mask] = normal[~normal_mask].detach()
-        normal_map[~normal_mask] = normal_map[~normal_mask].detach()
-        rendered_depth[~mask] = rendered_depth[~mask].detach()
-
-        if compute_normal_from_dist:
-            normal_from_dist[~normal_mask] = normal_from_dist[~normal_mask].detach()
-            normal_map_from_dist[~normal_mask] = normal_map_from_dist[~normal_mask].detach()
+            # when using mesh extracted by sugar, the directions of faces' normal is inward-pointing
+            normal = - normal
+            normal_map = normal * 0.5 * rendered_alpha + 0.5
+            normal_mask = mask.repeat(3, 1, 1)
+            normal[~normal_mask] = normal[~normal_mask].detach()
+            normal_map[~normal_mask] = normal_map[~normal_mask].detach()
+        else:
+            normal = None
+            normal_map = None
 
         # Retain gradients of the 2D (screen-space) means for batch dim
         if self.training:

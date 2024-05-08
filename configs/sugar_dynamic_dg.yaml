@@ -58,15 +58,16 @@ system:
     num_frames: 32 # 50
     use_spline: true
     interp_degree: 3
+
     use_deform_graph: true
     dynamic_mode: deformation # (deformation / discrete)
 
     n_dg_nodes: 1000
-    dg_node_connectivity: 16
+    dg_node_connectivity: 12
     # for discrete dynamic mode
-    dg_trans_lr: 0.0005
-    dg_rot_lr: 0.0002
-    dg_scale_lr: 0.0001
+    dg_trans_lr: 0.002
+    dg_rot_lr: 0.001
+    dg_scale_lr: 0.001
 
     vert_trans_lr: 0.001
     vert_rot_lr: 0.001
@@ -86,6 +87,10 @@ system:
     n_gaussians_per_surface_triangle: 6
 
     dist_mode: "eucdisc" # (eucdisc / geodisc)
+
+    # sparse gaussians
+    dg_node_as_sparse_gs: true
+    pretrained_static_sparse_gs_ckpt_path: ""
 
   exporter_type: "gaussian-mesh-exporter"
 
@@ -146,7 +151,7 @@ system:
     ref_only_steps: 0
     guidance_eval: 0
     inter_frame_reg: 0
-    milestone_arap_reg: 0
+    milestone_arap_reg: 100
 
   loggers:
     wandb:
@@ -155,7 +160,7 @@ system:
       name: None
 
   loss:
-    lambda_sds_zero123: 0.1
+    lambda_sds_zero123: 0 # 0.1
     lambda_sds_2d: 0
     lambda_sds_2d_img: 0 # 0.0001
     lambda_sds_vid: 0
@@ -165,19 +170,25 @@ system:
     lambda_depth_rel: 0. # [0, 0, 0.05, 100]
     lambda_normal: 0.5 # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
-    lambda_normal_consistency: 100. # 10.
-    lambda_normal_depth_consistency: 10.
+    lambda_normal_consistency: 0 # 100. # 10.
+    lambda_normal_depth_consistency: 0 # 10.
     lambda_laplacian_smoothing: 0.
     lambda_3d_normal_smooth: 0.
     lambda_arap_reg_key_frame: 10
     lambda_arap_reg_inter_frame: 10
     lambda_ref_xyz: 0
     # tv losses
-    lambda_rgb_tv: 1.
-    lambda_depth_tv: 1.
-    lambda_normal_tv: 10. # 1.
+    lambda_rgb_tv: 0 # 1.
+    lambda_depth_tv: 0 # 1.
+    lambda_normal_tv: 0 # 1. # 1.
     # object centric reg
     lambda_obj_centric: 0.
+
+    # sparse gaussians
+    lambda_rgb_sg: [200, 500, 5000, 2000]
+    lambda_mask_sg: [200, 500, 10000, 4000]
+    lambda_depth_rel_sg: 0.1
+    lambda_sds_zero123_sg: 1
 
 
   optimizer:

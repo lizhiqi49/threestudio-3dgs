@@ -47,11 +47,17 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
         guidance_2d_type: Optional[str] = None
         guidance_2d: dict = field(default_factory=dict)
 
-        # ==== SuGaR regularization configs for Gaussian stage === #
+        # ==== SuGaR regularization configs for Gaussian stage ==== #
         use_sugar_reg: bool = True
         knn_to_track: int = 16
         n_samples_for_sugar_sdf_reg: int = 500000
         # min_opac_prune: Any = 0.5
+
+        # === Sparse Gaussians (deformation nodes) optimization == #
+        optimize_sparse_gs: bool = True
+        geometry_sparse_gs: dict = field(default_factory=dict)
+        renderer_type_sparse_gs: str = ""
+        renderer_sparse_gs: dict = field(default_factory=dict)
 
 
     cfg: Config
@@ -62,6 +68,47 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
         self.stage = self.cfg.stage
         if self.stage == "gaussian":
             self.automatic_optimization = False
+
+        # Maybe optimize sparse gaussians
+        if self.stage == "sugar" and self.cfg.optimize_sparse_gs:
+            self.sparse_gs = self.build_sparse_gaussians()
+            self.renderer_sparse_gs = threestudio.find(self.cfg.renderer_type_sparse_gs)(
+                self.cfg.renderer_sparse_gs,
+                geometry=self.sparse_gs,
+                material=self.material,
+                background=self.background,
+            )
+        else:
+            self.sparse_gs = None
+            self.renderer_sparse_gs = None
+
+    def configure_optimizers(self):
+        optim = self.geometry.optimizer
+        if hasattr(self, "merged_optimizer"):
+            return [optim]
+        
+        if self.sparse_gs is not None:
+            sparse_gs_optim_list = self.sparse_gs.optimize_list
+            for p in sparse_gs_optim_list:
+                p["name"] = p["name"] + "_sparse_gs"
+            self.geometry.optimize_list += sparse_gs_optim_list
+            self.geometry.optimizer = torch.optim.AdamW(
+                self.geometry.optimize_list, lr=0.0, betas=[0.9, 0.99], eps=1.e-15)
+            optim = self.geometry.optimizer
+
+        if hasattr(self.cfg.optimizer, "name"):
+            net_optim = parse_optimizer(self.cfg.optimizer, self)
+            optim = self.geometry.merge_optimizer(net_optim)
+            self.merged_optimizer = True
+        else:
+            self.merged_optimizer = False
+        return [optim]
+
+    def on_fit_start(self) -> None:
+        super().on_fit_start()
+        self._render_type = "rgb"
+        self.sugar_reg = None
+        self.pearson = PearsonCorrCoef().to(self.device)
 
         # Zero123
         self.guidance = threestudio.find(self.cfg.guidance_type)(self.cfg.guidance)
@@ -77,24 +124,6 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
             self.prompt_processor_2d = None
             self.guidance_2d = None
 
-    def configure_optimizers(self):
-        optim = self.geometry.optimizer
-        if hasattr(self, "merged_optimizer"):
-            return [optim]
-        if hasattr(self.cfg.optimizer, "name"):
-            net_optim = parse_optimizer(self.cfg.optimizer, self)
-            optim = self.geometry.merge_optimizer(net_optim)
-            self.merged_optimizer = True
-        else:
-            self.merged_optimizer = False
-        return [optim]
-
-    def on_fit_start(self) -> None:
-        super().on_fit_start()
-        self._render_type = "rgb"
-        self.sugar_reg = None
-        self.pearson = PearsonCorrCoef().to(self.device)
-
     def on_load_checkpoint(self, checkpoint):
         if self.stage == "gaussian":
             num_pts = checkpoint["state_dict"]["geometry._xyz"].shape[0]
@@ -105,7 +134,8 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
             )
             self.geometry.create_from_pcd(pcd, 10)
             self.geometry.training_setup()
-            return
+            # return
+            super().on_load_checkpoint(checkpoint)
         # else:
         #     self.geometry.update_texture_features(self.geometry.cfg.square_size_in_texture)
 
@@ -158,7 +188,14 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
 
         batch["ambient_ratio"] = ambient_ratio
 
+        # maybe optimize sparse gs
+        if self.sparse_gs is not None:
+            out_sg = self.renderer_sparse_gs.batch_forward(batch)
+        else:
+            out_sg = None
+
         out = self(batch)
+
         loss_prefix = f"loss_{guidance}_"
 
         loss_terms = {}
@@ -182,6 +219,12 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
 
             # mask loss
             set_loss("mask", F.mse_loss(gt_mask.float(), out["comp_mask"]))
+
+            if out_sg is not None:
+                set_loss(
+                    "rgb_sparse_gs", F.mse_loss(gt_rgb, out_sg["comp_rgb"] * gt_mask.float()))
+                set_loss(
+                    "mask_sparse_gs", F.mse_loss(gt_mask.float(), out_sg["comp_mask"]))
 
             # depth loss
             if self.C(self.cfg.loss.lambda_depth) > 0:
@@ -226,6 +269,14 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
             )
             # claforte: TODO: rename the loss_terms keys
             set_loss("sds", guidance_out["loss_sds"])
+
+            if out_sg is not None:
+                set_loss(
+                    "rgb_rand_sparse_gs", F.mse_loss(out_sg["comp_rgb"], out["comp_rgb"].detach())
+                )
+                set_loss(
+                    "mask_rand_sparse_gs", F.mse_loss(out_sg["comp_mask"], out["comp_mask"].detach())
+                )
 
             # 2d diffusion guidance
             if self.guidance_2d is not None and self.global_step >= self.cfg.freq.milestone_2d_sds:
@@ -391,74 +442,103 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
             opt.zero_grad(set_to_none=True)
 
         return {"loss": total_loss}
+    
+    def build_sparse_gaussians(self):
+        sparse_gs = threestudio.find("gaussian-splatting")(self.cfg.geometry_sparse_gs)
+
+        # Uniformly sample points from mesh surface
+        mesh = o3d.io.read_triangle_mesh(self.cfg.geometry.surface_mesh_to_bind_path)
+        n_sparse_gs = self.cfg.geometry_sparse_gs.init_num_pts
+        downpcd = mesh.sample_points_uniformly(number_of_points=n_sparse_gs)
+        downpcd.paint_uniform_color([0.5, 0.5, 0.5])
+        pcd = BasicPointCloud(
+            points=np.asarray(downpcd.points),
+            colors=np.asarray(downpcd.colors),
+            normals=np.zeros((n_sparse_gs, 3)),
+        )
+
+        # Create sparse gaussians
+        sparse_gs.create_from_pcd(pcd, 10)
+        sparse_gs.training_setup()
+        sparse_gs.update_learning_rate(0)
+        return sparse_gs
 
     def validation_step(self, batch, batch_idx):
+
+        def save_out_to_image_grid(filename, out):
+            self.save_image_grid(
+                # f"it{self.true_global_step}-val/{batch['index'][0]}.png",
+                filename,
+                (
+                    [
+                        {
+                            "type": "rgb",
+                            "img": batch["rgb"][0],
+                            "kwargs": {"data_format": "HWC"},
+                        }
+                    ]
+                    if "rgb" in batch
+                    else []
+                )
+                + [
+                    {
+                        "type": "rgb",
+                        "img": out["comp_rgb"][0],
+                        "kwargs": {"data_format": "HWC"},
+                    },
+                ]
+                + (
+                    [
+                        {
+                            "type": "rgb",
+                            "img": out["comp_normal"][0],
+                            "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
+                        }
+                    ]
+                    if "comp_normal" in out
+                    else []
+                )
+                + (
+                    [
+                        {
+                            "type": "rgb",
+                            "img": out["comp_normal_from_dist"][0],
+                            "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
+                        }
+                    ]
+                    if "comp_normal_from_dist" in out
+                    else []
+                )
+                + (
+                    [
+                        {
+                            "type": "grayscale",
+                            "img": out["comp_mask"][0, :, :, 0],
+                            "kwargs": {"cmap": None, "data_range": (0, 1)},
+                        }
+                    ]
+                    if "comp_mask" in out
+                    else []
+                ),
+                # claforte: TODO: don't hardcode the frame numbers to record... read them from cfg instead.
+                name=None,
+                step=self.true_global_step,
+            )
+
+        if self.sparse_gs is not None:
+            out_sg = self.renderer_sparse_gs.batch_forward(batch)
+            save_out_to_image_grid(f"it{self.true_global_step}-val/{batch['index'][0]}_sparse_gs.png", out_sg)
+
         batch.update(
             {
                 "override_bg_color": torch.ones([1, 3], dtype=torch.float32, device=self.device)
             }
         )
         out = self(batch)
-        self.save_image_grid(
-            f"it{self.true_global_step}-val/{batch['index'][0]}.png",
-            (
-                [
-                    {
-                        "type": "rgb",
-                        "img": batch["rgb"][0],
-                        "kwargs": {"data_format": "HWC"},
-                    }
-                ]
-                if "rgb" in batch
-                else []
-            )
-            + [
-                {
-                    "type": "rgb",
-                    "img": out["comp_rgb"][0],
-                    "kwargs": {"data_format": "HWC"},
-                },
-            ]
-            + (
-                [
-                    {
-                        "type": "rgb",
-                        "img": out["comp_normal"][0],
-                        "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
-                    }
-                ]
-                if "comp_normal" in out
-                else []
-            )
-            + (
-                [
-                    {
-                        "type": "rgb",
-                        "img": out["comp_normal_from_dist"][0],
-                        "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
-                    }
-                ]
-                if "comp_normal_from_dist" in out
-                else []
-            )
-            + (
-                [
-                    {
-                        "type": "grayscale",
-                        "img": out["comp_mask"][0, :, :, 0],
-                        "kwargs": {"cmap": None, "data_range": (0, 1)},
-                    }
-                ]
-                if "comp_mask" in out
-                else []
-            ),
-            # claforte: TODO: don't hardcode the frame numbers to record... read them from cfg instead.
-            name=f"validation_step_batchidx_{batch_idx}"
-            if batch_idx in [0, 7, 15, 23, 29]
-            else None,
-            step=self.true_global_step,
-        )
+        save_out_to_image_grid(f"it{self.true_global_step}-val/{batch['index'][0]}.png", out)
 
+            
+        
     def on_validation_epoch_end(self):
         filestem = f"it{self.true_global_step}-val"
         self.save_img_sequence(
@@ -470,6 +550,17 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
             name="validation_epoch_end",
             step=self.true_global_step,
         )
+
+        if self.sparse_gs is not None:
+            self.save_img_sequence(
+                filestem+"-sparse-gs",
+                filestem,
+                "(\d+)_sparse_gs\.png",
+                save_format="mp4",
+                fps=30,
+                name="validation_epoch_end",
+                step=self.true_global_step,
+            )
 
         # Compute quantile of gaussian opacities
         n_quantiles = 10
@@ -538,5 +629,9 @@ class SuGaRStaticSystem(BaseSuGaRSystem):
             self.geometry.save_ply(pc_save_path)
         else:
             self.export_mesh_to_ply()
+            if self.sparse_gs is not None:
+                self.sparse_gs.save_ply(
+                    os.path.join(self.get_save_dir(), f"exported_sparse_gs_step{self.global_step}.ply")
+                )
 
 
