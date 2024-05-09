@@ -206,7 +206,7 @@ class SuGaR4DGen(BaseLift3DSystem):
             gt_rgb = batch["rgb"]
 
             # color loss
-            gt_rgb = gt_rgb * gt_mask.float()
+            # gt_rgb = gt_rgb * gt_mask.float()
             set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"]))
             # mask loss
             set_loss("mask", F.mse_loss(gt_mask.float(), out["comp_mask"]))
