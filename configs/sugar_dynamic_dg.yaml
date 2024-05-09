@@ -161,7 +161,7 @@ system:
   loss:
     lambda_sds_zero123: 0.1 # 0.1
     lambda_sds_2d: 0
-    lambda_sds_2d_img: 0.0001
+    lambda_sds_2d_img: 0. # 0.0001
     lambda_sds_vid: 0
     lambda_rgb: 5000.
     lambda_mask: 500.
@@ -204,7 +204,7 @@ trainer:
   max_steps: 2000
   log_every_n_steps: 1
   num_sanity_val_steps: 0
-  val_check_interval: 100
+  val_check_interval: 50
   enable_progress_bar: true
   precision: 32
 
