@@ -97,7 +97,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
 
         if self.training:
             # debug
-            invert_bg_color = True
+            invert_bg_color = False
             # invert_bg_color = np.random.rand() > self.cfg.invert_bg_prob
         else:
             invert_bg_color = True

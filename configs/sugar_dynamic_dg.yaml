@@ -88,7 +88,7 @@ system:
     dist_mode: "eucdisc" # (eucdisc / geodisc)
 
     # sparse gaussians
-    dg_node_as_sparse_gs: true
+    dg_node_as_sparse_gs: false
     pretrained_static_sparse_gs_ckpt_path: ""
 
   exporter_type: "gaussian-mesh-exporter"
@@ -161,7 +161,7 @@ system:
   loss:
     lambda_sds_zero123: 0.1 # 0.1
     lambda_sds_2d: 0
-    lambda_sds_2d_img: 0 # 0.0001
+    lambda_sds_2d_img: 0.0001
     lambda_sds_vid: 0
     lambda_rgb: 5000.
     lambda_mask: 500.
@@ -177,9 +177,9 @@ system:
     lambda_arap_reg_inter_frame: 1
     lambda_ref_xyz: 0
     # tv losses
-    lambda_rgb_tv: 0 # 1.
-    lambda_depth_tv: 0 # 1.
-    lambda_normal_tv: 0 # 1. # 1.
+    lambda_rgb_tv: 1.
+    lambda_depth_tv: 1.
+    lambda_normal_tv: 1. # 1.
     # object centric reg
     lambda_obj_centric: 0.
 

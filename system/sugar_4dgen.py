@@ -75,7 +75,7 @@ class SuGaR4DGen(BaseLift3DSystem):
     def configure(self):
         # create geometry, material, background, renderer
         super().configure()
-        self.automatic_optimization = True
+        self.automatic_optimization = False
         self.stage = self.cfg.stage
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
