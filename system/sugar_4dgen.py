@@ -73,7 +73,7 @@ class SuGaR4DGen(BaseLift3DSystem):
     def configure(self):
         # create geometry, material, background, renderer
         super().configure()
-        self.automatic_optimization = False
+        self.automatic_optimization = True
         self.stage = self.cfg.stage
         self.psnr = PeakSignalNoiseRatio(data_range=1.0)
 
@@ -155,7 +155,7 @@ class SuGaR4DGen(BaseLift3DSystem):
         # ARAP
         self.arap_coach = None
 
-    def training_substep(self, batch, batch_idx, guidance: str):
+    def training_substep(self, batch, batch_idx, guidance: str, render_sparse_gs: bool = False):
         """
         Args:
             guidance: one of "ref" (reference image supervision), "zero123"
@@ -174,14 +174,12 @@ class SuGaR4DGen(BaseLift3DSystem):
 
         batch["ambient_ratio"] = ambient_ratio
 
-        batch["render_sparse_gs"] = False
-        out = self(batch)
-
-        if self.geometry.sparse_gs is not None:
-            batch["render_sparse_gs"] = True
-            out_sg = self.renderer.batch_forward(batch)
+        if render_sparse_gs and self.geometry.sparse_gs is not None:
+            batch["render_sparse_gs"] = render_sparse_gs
+            out = self.renderer.batch_forward(batch)
         else:
-            out_sg = None
+            batch["render_sparse_gs"] = False
+            out = self(batch)
 
         loss_prefix = f"loss_{guidance}_"
 
@@ -201,16 +199,12 @@ class SuGaR4DGen(BaseLift3DSystem):
             gt_rgb = batch["rgb"]
 
             # color loss
-            gt_rgb = gt_rgb * gt_mask.float()
-            set_loss("rgb", F.mse_loss(gt_rgb, out["comp_rgb"]))
+            # gt_rgb = gt_rgb * gt_mask.float()
+            set_loss("rgb", F.mse_loss(gt_rgb*gt_mask.float(), out["comp_rgb"]*out["comp_mask"]))
             # mask loss
             set_loss("mask", F.mse_loss(gt_mask.float(), out["comp_mask"]))
 
-            if out_sg is not None:
-                set_loss("rgb_sg", F.mse_loss(gt_rgb, out_sg["comp_rgb"]))
-                set_loss("mask_sg", F.mse_loss(gt_mask.float(), out_sg["comp_mask"]))
-
-            # ref_psnr = self.psnr(gt_rgb, out["comp_rgb"])
+            # ref_psnr = self.psnr(gt_rgb, out["comp_rgb"]* gt_mask.float())
             # self.log(f"metric/PSNR", ref_psnr)
 
             # depth loss
@@ -233,11 +227,6 @@ class SuGaR4DGen(BaseLift3DSystem):
                 set_loss(
                     "depth_rel", 1 - self.pearson(valid_pred_depth, valid_gt_depth)
                 )
-                if out_sg is not None:
-                    valid_pred_depth_sg = out_sg["comp_depth"][gt_mask]
-                    set_loss(
-                        "depth_rel_sg", 1 - self.pearson(valid_pred_depth_sg, valid_gt_depth)
-                    )
 
             # normal loss
             if self.C(self.cfg.loss.lambda_normal) > 0:
@@ -280,21 +269,11 @@ class SuGaR4DGen(BaseLift3DSystem):
             )
             set_loss("sds_zero123", guidance_out["loss_sds"])
 
-            if out_sg is not None:
-                guidance_out_sg = self.guidance_zero123(
-                    out_sg["comp_rgb"],
-                    **batch,
-                    rgb_as_latents=False,
-                    guidance_eval=guidance_eval,
-                )
-                set_loss("sds_zero123_sg", guidance_out_sg["loss_sds"])
-
         # Regularization
-        if self.C(self.cfg.loss.lambda_normal_smooth) > 0:
-            if "comp_normal" not in out:
-                raise ValueError(
-                    "comp_normal is required for 2D normal smooth loss, no comp_normal is found in the output."
-                )
+        if (
+            out.__contains__("comp_normal")
+            and self.C(self.cfg.loss.lambda_normal_smooth) > 0
+        ):
             normal = out["comp_normal"]
             set_loss(
                 "normal_smooth",
@@ -320,11 +299,15 @@ class SuGaR4DGen(BaseLift3DSystem):
             loss_normal_tv = tv_loss(out["comp_normal"].permute(0, 3, 1, 2))
             set_loss("normal_tv", loss_normal_tv)
 
-        if self.C(self.cfg.loss.lambda_normal_depth_consistency) > 0:
-            if "comp_normal_from_dist" not in out:
-                raise ValueError(
-                    "comp_normal_from_dist is required for normal-depth consistency loss!"
-                )
+        if (
+            out.__contains__("comp_normal_from_dist")
+            and out.__contains__("comp_normal")
+            and self.C(self.cfg.loss.lambda_normal_depth_consistency) > 0
+        ):
+            # if "comp_normal_from_dist" not in out:
+            #     raise ValueError(
+            #         "comp_normal_from_dist is required for normal-depth consistency loss!"
+            #     )
             raw_normal = out["comp_normal"] * 2 - 1
             raw_normal_from_dist = out["comp_normal_from_dist"] * 2 - 1
             # loss_normal_depth_consistency = F.mse_loss(raw_normal, raw_normal_from_dist)
@@ -337,7 +320,7 @@ class SuGaR4DGen(BaseLift3DSystem):
             set_loss("ref_xyz", loss_ref_xyz)
 
         # object centric reg
-        if self.C(self.cfg.loss.lambda_obj_centric) > 0:
+        if self.C(self.cfg.loss.lambda_obj_centric) > 0 and not render_sparse_gs:
             vert_timed_xyz = torch.stack(
                 [value for value in self.geometry._deformed_vert_positions.values()],
                 dim=0
@@ -348,7 +331,7 @@ class SuGaR4DGen(BaseLift3DSystem):
             )
             set_loss("obj_centric", loss_obj_centric)
 
-        if self.stage == "motion":
+        if self.stage == "motion" and not render_sparse_gs:
             # ARAP regularization
             if guidance == "ref" and self.C(
                 self.cfg.loss.lambda_arap_reg_key_frame) > 0 and self.arap_coach is not None:
@@ -477,10 +460,14 @@ class SuGaR4DGen(BaseLift3DSystem):
             logger=True,
         )
 
-        out_zero123 = self.training_substep(batch, batch_idx, guidance="zero123")
+        render_sparse_gs = (self.global_step % self.cfg.freq.optimize_sparse_gs) == 0
+
+        out_zero123 = self.training_substep(
+            batch, batch_idx, guidance="zero123", render_sparse_gs=render_sparse_gs)
         total_loss += out_zero123["loss"]
 
-        out_ref = self.training_substep(batch, batch_idx, guidance="ref")
+        out_ref = self.training_substep(
+            batch, batch_idx, guidance="ref", render_sparse_gs=render_sparse_gs)
         total_loss += out_ref["loss"]
 
         if self.cfg.freq.inter_frame_reg > 0 and self.global_step % self.cfg.freq.inter_frame_reg == 0:
@@ -554,7 +541,7 @@ class SuGaR4DGen(BaseLift3DSystem):
             batch.update(
                 {
                     "timestamp": torch.as_tensor(
-                        [batch["index"] / batch["n_all_views"]], device=self.device
+                        [(batch["index"] + 1) / (batch["n_all_views"] + 1)], device=self.device
                     ),
                     "frame_indices": (
                         torch.as_tensor([batch_idx], device=self.device)
@@ -638,7 +625,7 @@ class SuGaR4DGen(BaseLift3DSystem):
             batch.update(
                 {
                     "timestamp": torch.as_tensor(
-                        [batch["index"] / batch["n_all_views"]], device=self.device
+                        [(batch["index"] + 1) / (batch["n_all_views"] + 1)], device=self.device
                     ),
                     "frame_indices": (
                         torch.as_tensor([batch_idx], device=self.device)

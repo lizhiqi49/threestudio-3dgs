@@ -153,8 +153,8 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
 
         self.frame_indices = torch.arange(self.video_length, dtype=torch.long)
         self.timestamps = torch.as_tensor(
-            np.linspace(0, 1, self.video_length, endpoint=True), dtype=torch.float32
-        )
+            np.linspace(0, 1, self.video_length+2, endpoint=True), dtype=torch.float32
+        )[1:-1]
 
     def set_rays(self):
         # get directions by dividing directions_unit_focal by focal length
@@ -292,8 +292,11 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
         return self.rgbs
 
     def collate(self, batch) -> Dict[str, Any]:
-        rand_frame_idx = np.random.choice(self.video_length, (self.num_frames,), replace=False)
+        rand_frame_idx = np.random.choice(self.video_length, (self.num_frames,), replace=False, )
         timestamps = self.timestamps[rand_frame_idx]
+        # Add noise to timestamps
+        timestamps = timestamps + 0.1 * (torch.rand_like(timestamps) * 2 - 1) / (self.video_length + 1)
+
         frame_indices = self.frame_indices[rand_frame_idx]
         batch = {
             "rays_o": self.rays_o.repeat(self.num_frames, 1, 1, 1),

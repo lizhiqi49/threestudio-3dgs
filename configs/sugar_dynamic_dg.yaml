@@ -5,13 +5,13 @@ seed: 0
 
 data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
-  video_frames_dir: ./load/consistent4d_data_processed/dancing_robot
+  video_frames_dir: ./load/consistent4d_data/synthetic/idling_elephant
   video_length: 32
   norm_timestamp: true
   # num of frames a batch
-  num_frames: 10
-  height: 512
-  width: 512
+  num_frames: 8
+  height: 256
+  width: 256
   resolution_milestones: [100]
   default_elevation_deg: 5.0
   default_azimuth_deg: 0.0
@@ -20,9 +20,9 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   requires_depth: ${cmaxgt0orcmaxgt0:${system.loss.lambda_depth},${system.loss.lambda_depth_rel}}
   requires_normal: ${cmaxgt0:${system.loss.lambda_normal}}
   random_camera: # threestudio/data/uncond.py -> RandomCameraDataModuleConfig
-    height: 256 # 512
-    width: 256 # 512
-    batch_size: 1
+    height: 512
+    width: 512
+    batch_size: 2
     eval_height: 512
     eval_width: 512
     eval_batch_size: 1
@@ -41,7 +41,7 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
     eval_fovy_deg: ${data.default_fovy_deg}
     light_sample_strategy: "dreamfusion"
     batch_uniform_azimuth: False
-    n_val_views: 30
+    n_val_views: 32
     n_test_views: 120
     rays_d_normalize: False
 
@@ -58,12 +58,12 @@ system:
     num_frames: 30
 
     use_spline: false
-    interp_degree: 1
+    interp_degree: 3
     use_deform_graph: true
     dynamic_mode: deformation # (deformation / discrete)
 
-    n_dg_nodes: 1000
-    dg_node_connectivity: 12
+    n_dg_nodes: 500
+    dg_node_connectivity: 6
     # for discrete dynamic mode
     dg_trans_lr: 0.002
     dg_rot_lr: 0.001
@@ -74,8 +74,8 @@ system:
     vert_scale_lr: 0.001
 
     # for deformation dynamic mode
-    deformation_lr: [0, 0.00032, 0.0001, 4000] # 0.00064
-    grid_lr: [0, 0.00032, 0.0001, 4000] # 0.0064
+    deformation_lr: 0.00032 # [0, 0.001, 0.0001, 4000] # 0.00064
+    grid_lr: 0.00032 # [0, 0.001, 0.0001, 4000] # 0.0064
 
     # dynamic attr
     d_scale: false
@@ -86,10 +86,11 @@ system:
     surface_mesh_to_bind_path: ""
     n_gaussians_per_surface_triangle: 6
 
-    dist_mode: "eucdisc" # (eucdisc / geodisc)
+    dist_mode: "geodisc" # (eucdisc / geodisc)
+    skinning_method: "lbs"
 
     # sparse gaussians
-    dg_node_as_sparse_gs: false
+    dg_node_as_sparse_gs: true
     pretrained_static_sparse_gs_ckpt_path: ""
 
   exporter_type: "gaussian-mesh-exporter"
@@ -152,6 +153,7 @@ system:
     guidance_eval: 0
     inter_frame_reg: 0
     milestone_arap_reg: 100
+    optimize_sparse_gs: 2
 
   loggers:
     wandb:
@@ -160,35 +162,35 @@ system:
       name: None
 
   loss:
-    lambda_sds_zero123: 0.1
+    lambda_sds_zero123: 1
     lambda_sds_2d: 0
     lambda_sds_2d_img: 0.0001
     lambda_sds_vid: 0
-    lambda_rgb: [200, 500, 5000, 2000]
-    lambda_mask: [200, 500, 10000, 4000]
-    lambda_depth: 0.05
-    lambda_depth_rel: 0.1
-    lambda_normal: [0, 0, 0.05, 100]
+    lambda_rgb: 5000
+    lambda_mask: 5000
+    lambda_depth: 0 # 0.05
+    lambda_depth_rel: 0 # 0.1
+    lambda_normal: 0 # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
     lambda_normal_consistency: 100. # 10.
     lambda_normal_depth_consistency: 10.
     lambda_laplacian_smoothing: 0.
     lambda_3d_normal_smooth: 0.
-    lambda_arap_reg_key_frame: [100, 1, 10, 1000]
-    lambda_arap_reg_inter_frame: [100, 1, 10, 1000]
+    lambda_arap_reg_key_frame: [100, 1, 100, 1000]
+    lambda_arap_reg_inter_frame: [100, 1, 100, 1000]
     lambda_ref_xyz: 0
     # tv losses
     lambda_rgb_tv: 1.
-    lambda_depth_tv: 1.
-    lambda_normal_tv: 1. # 1.
+    lambda_depth_tv: 10.
+    lambda_normal_tv: 10. # 1.
     # object centric reg
-    lambda_obj_centric: 0.
+    lambda_obj_centric: 1.
 
-    # sparse gaussians
-    lambda_rgb_sg: [200, 500, 5000, 2000]
-    lambda_mask_sg: [200, 500, 10000, 4000]
-    lambda_depth_rel_sg: 0.1
-    lambda_sds_zero123_sg: 1
+    # # sparse gaussians
+    # lambda_rgb_sg: 5000
+    # lambda_mask_sg: 5000
+    # lambda_depth_rel_sg: 0.1
+    # lambda_sds_zero123_sg: 1
 
 
   optimizer:
