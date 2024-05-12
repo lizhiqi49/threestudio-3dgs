@@ -85,10 +85,11 @@ system:
     surface_mesh_to_bind_path: ""
     n_gaussians_per_surface_triangle: 6
 
-    dist_mode: "eucdisc" # (eucdisc / geodisc)
+    dist_mode: "geodisc" # (eucdisc / geodisc)
+    skinning_method: "lbs"
 
     # sparse gaussians
-    dg_node_as_sparse_gs: false
+    dg_node_as_sparse_gs: true
     pretrained_static_sparse_gs_ckpt_path: ""
 
   exporter_type: "gaussian-mesh-exporter"
@@ -150,7 +151,8 @@ system:
     ref_only_steps: 0
     guidance_eval: 0
     inter_frame_reg: 0
-    milestone_arap_reg: 0
+    milestone_arap_reg: 100
+    optimize_sparse_gs: 2
 
   loggers:
     wandb:
@@ -181,13 +183,13 @@ system:
     lambda_depth_tv: 0. # 1.
     lambda_normal_tv: 0. # 1. # 1.
     # object centric reg
-    lambda_obj_centric: 0.
+    lambda_obj_centric: 1.
 
-    # sparse gaussians
-    lambda_rgb_sg: 5000. # [200, 500, 5000, 2000]
-    lambda_mask_sg: 500. # [200, 50, 500, 2000]
-    lambda_depth_rel_sg: 0. # 0.1
-    lambda_sds_zero123_sg: 0.1 # 1
+    # # sparse gaussians
+    # lambda_rgb_sg: 5000
+    # lambda_mask_sg: 5000
+    # lambda_depth_rel_sg: 0.1
+    # lambda_sds_zero123_sg: 1
 
 
   optimizer:

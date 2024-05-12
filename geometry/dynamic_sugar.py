@@ -600,6 +600,13 @@ class DynamicSuGaRModel(SuGaRModel):
             ).squeeze(-1).reshape(n_t, num_pts, -1, 3)
             deformed_xyz = deformed_xyz + neighbor_nodes_xyz.unsqueeze(0) + neighbor_nodes_trans
 
+            # deformed_xyz = torch.bmm(
+            #     neighbor_nodes_rots.matrix().reshape(-1, 3, 3), 
+            #     self.get_xyz_verts.unsqueeze(0).unsqueeze(2).unsqueeze(-1).repeat(
+            #         n_t, 1, neighbor_nodes_xyz.shape[1], 1, 1).reshape(-1, 3, 1)
+            # ).squeeze(-1).reshape(n_t, num_pts, -1, 3)
+            # deformed_xyz = deformed_xyz + neighbor_nodes_trans
+
             nn_weights = self._xyz_neighbor_nodes_weights[None, :, :, None]
             deformed_vert_xyz = (nn_weights * deformed_xyz).sum(dim=2)
         elif self.cfg.skinning_method == "dqs":

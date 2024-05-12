@@ -90,7 +90,7 @@ system:
 
     sphere: False
 
-    init_num_pts: 1000
+    init_num_pts: 500
     pc_init_radius: 0.5
     opacity_init: 0.05
 
@@ -200,9 +200,6 @@ system:
     params:
       background:
         lr: 0.001
-#      guidance_2d:
-#        lr: 0.0001
-
 
 trainer:
   max_steps: 2000
