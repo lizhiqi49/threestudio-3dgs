@@ -81,7 +81,6 @@ class SuGaR4DGen(BaseLift3DSystem):
         self.ssim = StructuralSimilarityIndexMeasure(data_range=1.0)
         self.lpips = LearnedPerceptualImagePatchSimilarity(net_type='squeeze')
 
-
     def configure_optimizers(self):
         optim = self.geometry.optimizer
         if hasattr(self, "merged_optimizer"):
@@ -453,6 +452,10 @@ class SuGaR4DGen(BaseLift3DSystem):
         vert_timed_xyz = self.geometry.get_timed_vertex_xyz(tgt_timestamp, tgt_frame_idx)
         vert_timed_rot = self.geometry.get_timed_vertex_rotation(
             tgt_timestamp, tgt_frame_idx, return_matrix=True)
+
+        # dg_node_attrs = self.geometry.get_timed_dg_attributes(tgt_timestamp, tgt_frame_idx)
+        # vert_timed_xyz, vert_timed_rot = dg_node_attrs["xyz"], dg_node_attrs["rotation"].matrix()
+
         loss_arap = 0.
         for i in range(vert_timed_xyz.shape[0]):
             loss_arap += self.arap_coach.compute_arap_energy(
@@ -472,6 +475,7 @@ class SuGaR4DGen(BaseLift3DSystem):
                 self.geometry.get_faces.cpu().numpy(),
                 self.device
             )
+            # self.arap_coach = ARAPCoach(self.geometry.sparse_gs.get_xyz, None, self.device)
 
     def training_step(self, batch, batch_idx):
         opt = self.optimizers()
@@ -592,7 +596,8 @@ class SuGaR4DGen(BaseLift3DSystem):
             if self.geometry.sparse_gs is not None:
                 self.batch_ref_eval["render_sparse_gs"] = True
                 out_ref_sg = self.renderer.batch_forward(self.batch_ref_eval)
-                save_out_to_image_grid(f"it{self.true_global_step}-val-ref/{batch['index'][0]}_sparse_gs.png", out_ref_sg)
+                save_out_to_image_grid(f"it{self.true_global_step}-val-ref/{batch['index'][0]}_sparse_gs.png",
+                                       out_ref_sg)
 
     def on_validation_epoch_end(self):
         filestem = f"it{self.true_global_step}-val"
@@ -607,7 +612,7 @@ class SuGaR4DGen(BaseLift3DSystem):
         )
         if self.geometry.sparse_gs is not None:
             self.save_img_sequence(
-                filestem+"-sparse-gs",
+                filestem + "-sparse-gs",
                 filestem,
                 "(\d+)_sparse_gs\.png",
                 save_format="mp4",
@@ -628,7 +633,7 @@ class SuGaR4DGen(BaseLift3DSystem):
             )
             if self.geometry.sparse_gs is not None:
                 self.save_img_sequence(
-                    filestem+"-sparse-gs",
+                    filestem + "-sparse-gs",
                     filestem,
                     "(\d+)_sparse_gs\.png",
                     save_format="mp4",
@@ -636,7 +641,6 @@ class SuGaR4DGen(BaseLift3DSystem):
                     name="validation_epoch_end_sg-ref",
                     step=self.true_global_step,
                 )
-
 
     def on_test_epoch_start(self) -> None:
         if self.geometry.cfg.use_spline:

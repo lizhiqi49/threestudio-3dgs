@@ -3,14 +3,15 @@ import torch
 from numpy import ndarray
 from collections import defaultdict
 from threestudio.utils.typing import *
+import open3d as o3d
 
 ### Attempt to import svd batch method. If not provided, use default method
 ### Sourced from https://github.com/KinglittleQ/torch-batch-svd/blob/master/torch_batch_svd/include/utils.h
 try:
-	from torch_batch_svd import svd as batch_svd
+    from torch_batch_svd import svd as batch_svd
 except ImportError:
-	print("torch_batch_svd not installed. Using torch.svd instead")
-	batch_svd = torch.svd
+    print("torch_batch_svd not installed. Using torch.svd instead")
+    batch_svd = torch.svd
 
 
 class ARAPCoach:
@@ -21,25 +22,59 @@ class ARAPCoach:
         faces: Int[ndarray, "N_face 3"],
         device: torch.device
     ):
+
         self.verts = verts
-        self.faces = faces
         self.device = device
         self.n_verts = len(verts)
-        self.n_faces = len(faces)
-        self.one_ring_neighbors = self.get_one_ring_neighbors(self.faces)
-        self.max_n_neighbors = max(map(len, self.one_ring_neighbors.values()))
-        self._indices_for_nfmt = self.get_indices()
-        self.edge_cot_weights = self.produce_cot_weights_nfmt(self.verts, sparse=False)
-        self.edge_matrix_nfmt = self.produce_edge_matrix_nfmt(self.verts)
+        # faces = None
 
+        if faces is not None:
+            self.faces = faces
+            self.n_faces = len(faces)
 
+            self.one_ring_neighbors = self.get_one_ring_neighbors(self.faces)
+            self.max_n_neighbors = max(map(len, self.one_ring_neighbors.values()))
+
+            # _indices_for_nfmt ijn is vertex i connected to vertex j with the nth index(n \in [0, max_n_neighbors-1])
+            self._indices_for_nfmt = self.get_indices()
+            # edge_cot_weights i are the weights between vertex i and all its one ring connected vertices(0 for no connection)
+            self.edge_cot_weights = self.produce_cot_weights_nfmt(self.verts, sparse=False)
+            # edge_matrix nfmt ij is the tensor from vertex j to vertex i
+            self.edge_matrix_nfmt = self.produce_edge_matrix_nfmt(self.verts)
+            pass
+
+        else:
+            # use KNN to compute weight
+            verts_cpu = verts.cpu().numpy()
+            pcd = o3d.geometry.PointCloud()
+            pcd.points = o3d.utility.Vector3dVector(verts_cpu)
+            kdtree = o3d.geometry.KDTreeFlann(pcd)
+
+            nodes_connectivity = 8
+            verts_neighbor_idx = []
+            verts_neighbor_weight = []
+            for i in range(verts_cpu.shape[0]):
+                _, idx, dist2 = kdtree.search_knn_vector_3d(verts_cpu[i], nodes_connectivity + 1)
+                verts_neighbor_idx.append(torch.from_numpy(np.asarray(idx))[1:])
+
+                dist2_tensor = torch.from_numpy(np.asarray(dist2))[1:].float().to(device)
+                weights = torch.exp(-(dist2_tensor - torch.min(dist2_tensor)) / torch.max(dist2_tensor))
+                verts_neighbor_weight.append(weights)
+
+            self.one_ring_neighbors = {k: v.tolist() for k, v in enumerate(verts_neighbor_idx)}
+            self.max_n_neighbors = nodes_connectivity
+
+            self._indices_for_nfmt = self.get_indices()
+            self.edge_cot_weights = torch.stack(verts_neighbor_weight)
+            self.edge_matrix_nfmt = self.produce_edge_matrix_nfmt(self.verts)
+            pass
 
     @classmethod
     def get_one_ring_neighbors(cls, faces) -> Dict[Int, List[Int]]:
         mapping = defaultdict(set)
         for f in faces:
             for j in range(3):  # for each vert in the face
-                i, k = (j + 1) % 3, (j + 2) % 3 # get the 2 other vertices
+                i, k = (j + 1) % 3, (j + 2) % 3  # get the 2 other vertices
                 mapping[f[j]].add(f[i])
                 mapping[f[j]].add(f[k])
         orn = {k: list(v) for k, v in mapping.items()}  # convert to list
@@ -107,7 +142,7 @@ class ARAPCoach:
             W = w
         else:
             i = faces[:, [0, 1, 2]].flatten()  # flattened tensor of by face, v0, v1, v2
-            j = faces[:, [1, 2, 0]].flatten() # flattened tensor of by face, v1, v2, v0
+            j = faces[:, [1, 2, 0]].flatten()  # flattened tensor of by face, v1, v2, v0
 
             # flatten cot, such that the following line sets
             # w_ij = 0.5 * cot a_ij
@@ -127,7 +162,7 @@ class ARAPCoach:
                 start = counter * chunk_size
                 end = start + chunk_size
                 Wn[ii[start:end], nn[start:end]] = (
-                     W.index_select(0, ii[start:end]).to_dense()[:, jj[start:end]]
+                    W.index_select(0, ii[start:end]).to_dense()[:, jj[start:end]]
                 )
                 counter += 0
             start = counter * chunk_size
