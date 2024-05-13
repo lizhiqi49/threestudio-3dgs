@@ -85,7 +85,7 @@ system:
     surface_mesh_to_bind_path: ""
     n_gaussians_per_surface_triangle: 6
 
-    dist_mode: "geodisc" # (eucdisc / geodisc)
+    dist_mode: "eucdisc" # (eucdisc / geodisc)
     skinning_method: "lbs"
 
     # sparse gaussians
@@ -206,7 +206,7 @@ trainer:
   max_steps: 2000
   log_every_n_steps: 1
   num_sanity_val_steps: 0
-  val_check_interval: 100
+  val_check_interval: 50
   enable_progress_bar: true
   precision: 32
 
