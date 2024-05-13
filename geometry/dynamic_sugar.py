@@ -37,6 +37,17 @@ from ..utils.dual_quaternions import DualQuaternion
 
 import potpourri3d as pp3d
 
+def strain_tensor_to_matrix(strain_tensor: Float[Tensor, "... 6"]):
+    strain_matrix = torch.zeros(*strain_tensor.shape[:-1], 3, 3)
+    strain_matrix[..., 0, 0] += 1.
+    strain_matrix[..., 1, 1] += 1.
+    strain_matrix[..., 2, 2] += 1.
+    strain_matrix = strain_matrix.to(strain_tensor).flatten(-2, -1)
+    strain_matrix[..., [0, 4, 8]] += strain_tensor[..., :3]
+    strain_matrix[..., [1, 2, 5]] += strain_tensor[..., 3:]
+    strain_matrix[..., [3, 6, 7]] += strain_tensor[..., 3:]
+    strain_matrix = strain_matrix.reshape(*strain_tensor.shape[:-1], 3, 3)
+    return strain_matrix
 
 @threestudio.register("dynamic-sugar")
 class DynamicSuGaRModel(SuGaRModel):
@@ -157,8 +168,8 @@ class DynamicSuGaRModel(SuGaRModel):
         elif self.dynamic_mode == "deformation":
             deformation_args = ModelHiddenParams(None)
             deformation_args.no_dr = False
-            deformation_args.no_ds = not self.cfg.d_scale
-            deformation_args.no_do = True
+            deformation_args.no_ds = not (self.cfg.d_scale or self.cfg.skinning_method == "hybrid")
+            deformation_args.no_do = not (self.cfg.skinning_method == "hybrid")
 
             self._deformation = DeformationNetwork(deformation_args)
             self._deformation_table = torch.empty(0)
@@ -482,7 +493,9 @@ class DynamicSuGaRModel(SuGaRModel):
         timed_attrs["scale"] = torch.cat(
             [attr_dict["scale"] for attr_dict in timed_attr_list], dim=0
         ) if self.cfg.d_scale else None
-
+        timed_attrs["opacity"] = torch.cat(
+            [attr_dict["opacity"] for attr_dict in timed_attr_list], dim=0
+        ) if self.cfg.skinning_method == "hybrid" else None
         return timed_attrs
     
     def _get_timed_dg_attributes(
@@ -533,13 +546,16 @@ class DynamicSuGaRModel(SuGaRModel):
             rot = rot + idt_quaternion
 
             if d_scale is not None:
-                d_scale = d_scale.reshape(num_t, num_pts, 3)
+                d_scale = d_scale.reshape(num_t, num_pts, 6)
+                # to shear matrix
+                d_scale = strain_tensor_to_matrix(d_scale)
             if d_opacity is not None:
                 d_opacity = d_opacity.reshape(num_t, num_pts, 1)
+                d_opacity = F.sigmoid(d_opacity)
         # rot = rot / rot.norm(dim=-1, keepdim=True)
         rot = F.normalize(rot, dim=-1)
         attrs = {
-            "xyz": trans, "rotation": pp.SO3(rot), "scale": d_scale
+            "xyz": trans, "rotation": pp.SO3(rot), "scale": d_scale, "opacity": d_opacity
         }
         return attrs
 
@@ -582,19 +598,38 @@ class DynamicSuGaRModel(SuGaRModel):
         neighbor_nodes_rots: Float[pp.LieTensor, "N_t N_p N_n 4"]
         neighbor_nodes_trans = dg_node_trans[:, self._xyz_neighbor_node_idx]
         neighbor_nodes_rots = dg_node_rots[:, self._xyz_neighbor_node_idx]
+        
+        # deform vertex scale
+        if self.cfg.d_scale or self.cfg.skinning_method == "hybrid":
+            dg_node_scales = dg_node_attrs.get("scale")
+            assert dg_node_scales is not None
+
+            neighbor_nodes_scales: Float[Tensor, "N_t N_p N_n 3 3"]
+            neighbor_nodes_scales = dg_node_scales[:, self._xyz_neighbor_node_idx]
 
         # deform vertex xyz
-        if self.cfg.skinning_method == "lbs":
+        if self.cfg.skinning_method == "lbs" or self.cfg.skinning_method == "hybrid":
             num_pts = self.get_xyz_verts.shape[0]
-            dists_vec: Float[Tensor, "N_t N_p N_n 3 1"]
-            dists_vec = (self.get_xyz_verts.unsqueeze(1) - neighbor_nodes_xyz).unsqueeze(-1)
-            dists_vec = torch.stack([dists_vec] * n_t, dim=0)
+            # dists_vec: Float[Tensor, "N_t N_p N_n 3 1"]
+            # dists_vec = (self.get_xyz_verts.unsqueeze(1) - neighbor_nodes_xyz).unsqueeze(-1)
+            # dists_vec = torch.stack([dists_vec] * n_t, dim=0)
 
-            deformed_vert_xyz: Float[Tensor, "N_t N_p 3"]
+            # deformed_vert_xyz: Float[Tensor, "N_t N_p 3"]
+            # deformed_xyz = torch.bmm(
+            #     neighbor_nodes_rots.matrix().reshape(-1, 3, 3), dists_vec.reshape(-1, 3, 1)
+            # ).squeeze(-1).reshape(n_t, num_pts, -1, 3)
+            # deformed_xyz = deformed_xyz + neighbor_nodes_xyz.unsqueeze(0) + neighbor_nodes_trans
+            
             deformed_xyz = torch.bmm(
-                neighbor_nodes_rots.matrix().reshape(-1, 3, 3), dists_vec.reshape(-1, 3, 1)
+                neighbor_nodes_scales.reshape(-1, 3, 3), 
+                self.get_xyz_verts.unsqueeze(0).unsqueeze(2).unsqueeze(-1).repeat(
+                    n_t, 1, neighbor_nodes_xyz.shape[1], 1, 1).reshape(-1, 3, 1)
+            )
+            deformed_xyz = torch.bmm(
+                neighbor_nodes_rots.matrix().reshape(-1, 3, 3), deformed_xyz
             ).squeeze(-1).reshape(n_t, num_pts, -1, 3)
-            deformed_xyz = deformed_xyz + neighbor_nodes_xyz.unsqueeze(0) + neighbor_nodes_trans
+            deformed_xyz = deformed_xyz + neighbor_nodes_trans
+            
 
             # deformed_xyz = torch.bmm(
             #     neighbor_nodes_rots.matrix().reshape(-1, 3, 3), 
@@ -604,8 +639,9 @@ class DynamicSuGaRModel(SuGaRModel):
             # deformed_xyz = deformed_xyz + neighbor_nodes_trans
 
             nn_weights = self._xyz_neighbor_nodes_weights[None, :, :, None]
-            deformed_vert_xyz = (nn_weights * deformed_xyz).sum(dim=2)
-        elif self.cfg.skinning_method == "dqs":
+            deformed_vert_xyz_lbs = (nn_weights * deformed_xyz).sum(dim=2)
+            
+        if self.cfg.skinning_method == "dqs" or self.cfg.skinning_method == "hybrid":
             dual_quat = DualQuaternion.from_quat_pose_array(
                 torch.cat([neighbor_nodes_rots.tensor(), neighbor_nodes_trans], dim=-1)
             )
@@ -618,8 +654,19 @@ class DynamicSuGaRModel(SuGaRModel):
                 torch.cat([weighted_sum_q_real, weighted_sum_q_dual], dim=-1)
             )
             dq_normalized = weighted_sum_dual_quat.normalized()
-            deformed_vert_xyz = dq_normalized.transform_point_simple(self.get_xyz_verts)
-
+            deformed_vert_xyz_dqs = dq_normalized.transform_point_simple(self.get_xyz_verts)
+        
+        if self.cfg.skinning_method == "lbs":
+            deformed_vert_xyz = deformed_vert_xyz_lbs
+        elif self.cfg.skinning_method == "dqs":
+            deformed_vert_xyz = deformed_vert_xyz_dqs    
+        elif self.cfg.skinning_method == "hybrid":
+            neighbor_nodes_opacity = dg_node_attrs["opacity"][:, self._xyz_neighbor_node_idx]
+            vert_lbs_weight = (
+                self._xyz_neighbor_nodes_weights[None, ..., None] * neighbor_nodes_opacity
+            ).sum(dim=-2)
+            deformed_vert_xyz = vert_lbs_weight * deformed_vert_xyz_lbs + (1 - vert_lbs_weight) * deformed_vert_xyz_dqs
+            
         # deform vertex rotation
         deformed_vert_rots: Float[pp.LieTensor, "N_t N_p 4"]
         deformed_vert_rots = (
@@ -627,21 +674,27 @@ class DynamicSuGaRModel(SuGaRModel):
         ).sum(dim=-2)
         deformed_vert_rots = pp.so3(deformed_vert_rots).Exp()
         # deformed_vert_rots = pp.SO3(deformed_vert_rots / deformed_vert_rots.norm(dim=-1, keepdim=True))
-
+        
         outs = {"xyz": deformed_vert_xyz, "rotation": deformed_vert_rots}
-
-        # deform vertex scale
         if self.cfg.d_scale:
-            dg_node_scales = dg_node_attrs.get("scale")
-            assert dg_node_scales is not None
-
-            neighbor_nodes_scales: Float[Tensor, "N_t N_p N_n 3"]
-            neighbor_nodes_scales = dg_node_scales[:, self._xyz_neighbor_node_idx]
-            deformed_vert_scales: Float[Tensor, "N_t N_p 3"]
-            deformed_vert_scales = (
-                self._xyz_neighbor_nodes_weights[None, ..., None] * neighbor_nodes_scales
-            ).sum(dim=-2)
-            outs["scale"] = deformed_vert_scales
+            deformed_vert_scales: Float[Tensor, "N_t N_p 3 3"]
+            if self.cfg.skinning_method == "lbs":
+                deformed_vert_scales = (
+                    self._xyz_neighbor_nodes_weights[None, ..., None, None] * neighbor_nodes_scales
+                ).sum(dim=-3)
+                outs["scale"] = deformed_vert_scales
+            elif self.cfg.skinning_method == "hybrid":
+                deformed_vert_scales = (
+                    self._xyz_neighbor_nodes_weights[None, ..., None, None]
+                    * neighbor_nodes_opacity[..., None]
+                    * neighbor_nodes_scales
+                ).sum(dim=-3)
+                deformed_vert_scales = (
+                    deformed_vert_scales 
+                    + (1 - vert_lbs_weight)[..., None] * torch.eye(3).to(deformed_vert_scales)
+                )
+                outs["scale"] = deformed_vert_scales
+                
 
         return outs
 
@@ -695,10 +748,14 @@ class DynamicSuGaRModel(SuGaRModel):
         self.sparse_gs: GaussianBaseModel
         dg_node_attrs = self.get_timed_dg_attributes(timestamp, frame_idx)
         d_trans, d_rots = dg_node_attrs["xyz"], dg_node_attrs["rotation"]
-        if self.cfg.d_scale:
-            d_scale = dg_node_attrs["scale"]
-        else:
-            d_scale = torch.ones_like(d_trans)
+        # if self.cfg.d_scale or self.cfg.skinning_method == "hybrid":
+        #     d_scale = dg_node_attrs["scale"]
+        # else:
+        #     d_scale = torch.ones_like(d_trans)
+        d_scale = dg_node_attrs["scale"]
+        if self.cfg.skinning_method == "hybrid":
+            weight_lbs = dg_node_attrs["opacity"].unsqueeze(-1)
+            d_scale = d_scale * weight_lbs + (1 - weight_lbs) * torch.eye(3).to(d_scale)
 
         xyz_orig = self.sparse_gs.get_xyz
         rot_orig = self.sparse_gs.get_rotation
@@ -706,14 +763,18 @@ class DynamicSuGaRModel(SuGaRModel):
         opacity = self.sparse_gs.get_opacity
 
         # xyz
-        means3D = xyz_orig * d_scale + d_trans
+        # means3D = xyz_orig * d_scale + d_trans
+        means3D = torch.einsum("tpij,tpjk->tpik", d_scale, xyz_orig.unsqueeze(0).unsqueeze(-1))
+        means3D = torch.einsum("tpij,tpjk->tpik", d_rots.matrix(), means3D).squeeze(-1) + d_trans
+        
         # means3D = torch.einsum("tpij,tpjk->tpik", d_rots.matrix(), (xyz_orig * d_scale).unsqueeze(-1)).squeeze(-1) + d_trans
         # means3D = torch.bmm(d_rots.matrix(), (xyz_orig * d_scale).unsqueeze(-1)).squeeze(-1) + d_trans
         # rotation
         rotations = d_rots * pp.SO3(rot_orig[None, ..., [1, 2, 3, 0]])
         rotations = self.sparse_gs.rotation_activation(rotations.tensor()[..., [3, 0, 1, 2]])
         # scale
-        scales = scale_orig[None] * d_scale
+        # scales = scale_orig[None] * d_scale
+        scales = torch.einsum("tpij,tpjk->tpik", d_scale, scale_orig.unsqueeze(0).unsqueeze(-1)).squeeze(-1)
         # opacity
         opacity = torch.stack([opacity] * means3D.shape[0], dim=0)
         return {
@@ -758,16 +819,24 @@ class DynamicSuGaRModel(SuGaRModel):
         # scales
         if self.cfg.d_scale:
             # gs_scales_orig = self._scales
-            gs_scales_orig = torch.cat([
-                torch.zeros(len(self._scales), 1, device=self.device),
-                self._scales], dim=-1)
-            vert_timed_dscales = vert_attrs["scale"][:, self._gs_vert_connections, :]
-            gs_timed_dscale = (self._gs_bary_weights[None] * vert_timed_dscales).sum(dim=-2)
-            # gs_timed_scales = gs_scales_orig + gs_timed_dscale
-            gs_timed_scales = gs_scales_orig * (gs_timed_dscale + 1)
-            gs_timed_scales = torch.cat([
-                self.surface_mesh_thickness * torch.ones(*gs_timed_scales.shape[:-1], 1, device=self.device),
-                self.scale_activation(gs_timed_scales[..., 1:])], dim=-1)
+            # gs_scales_orig = torch.cat([
+            #     torch.zeros(len(self._scales), 1, device=self.device),
+            #     self._scales], dim=-1)
+            # vert_timed_dscales = vert_attrs["scale"][:, self._gs_vert_connections, :]
+            # gs_timed_dscale = (self._gs_bary_weights[None] * vert_timed_dscales).sum(dim=-2)
+            # # gs_timed_scales = gs_scales_orig + gs_timed_dscale
+            # gs_timed_scales = gs_scales_orig * (gs_timed_dscale + 1)
+            # gs_timed_scales = torch.cat([
+            #     self.surface_mesh_thickness * torch.ones(*gs_timed_scales.shape[:-1], 1, device=self.device),
+            #     self.scale_activation(gs_timed_scales[..., 1:])], dim=-1)
+            # gs_attrs["scale"] = gs_timed_scales
+            
+            gs_scales_orig = torch.stack([self.scaling]*gs_timed_xyz.shape[0], dim=0)
+            vert_timed_dscales = vert_attrs["scale"][:, self._gs_vert_connections, ...]
+            gs_timed_dscale = (self._gs_bary_weights[None, ..., None] * vert_timed_dscales).sum(dim=-3)
+            gs_timed_scales = torch.einsum(
+                "tpij,tpjk->tpik", gs_timed_dscale, gs_scales_orig.unsqueeze(-1)
+            ).squeeze(-1)
             gs_attrs["scale"] = gs_timed_scales
 
         return gs_attrs

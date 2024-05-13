@@ -5,7 +5,7 @@ seed: 0
 
 data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
-  video_frames_dir: ./load/consistent4d_data/synthetic/idling_elephant
+  video_frames_dir: ./load/consistent4d_data/in-the-wild/dancing_robot
   video_length: 32
   norm_timestamp: true
   # num of frames a batch
@@ -62,8 +62,8 @@ system:
     use_deform_graph: true
     dynamic_mode: deformation # (deformation / discrete)
 
-    n_dg_nodes: 500
-    dg_node_connectivity: 6
+    n_dg_nodes: 512
+    dg_node_connectivity: 4
     # for discrete dynamic mode
     dg_trans_lr: 0.002
     dg_rot_lr: 0.001
@@ -78,7 +78,7 @@ system:
     grid_lr: 0.00032 # [0, 0.001, 0.0001, 4000] # 0.0064
 
     # dynamic attr
-    d_scale: false
+    d_scale: true
 
     spatial_extent: ${data.default_camera_distance}
     spatial_lr_scale: 1
@@ -86,8 +86,8 @@ system:
     surface_mesh_to_bind_path: ""
     n_gaussians_per_surface_triangle: 6
 
-    dist_mode: "geodisc" # (eucdisc / geodisc)
-    skinning_method: "lbs"
+    dist_mode: "eucdisc" # (eucdisc / geodisc)
+    skinning_method: "hybrid"
 
     # sparse gaussians
     dg_node_as_sparse_gs: true
@@ -176,8 +176,8 @@ system:
     lambda_normal_depth_consistency: 10.
     lambda_laplacian_smoothing: 0.
     lambda_3d_normal_smooth: 0.
-    lambda_arap_reg_key_frame: [100, 1, 100, 1000]
-    lambda_arap_reg_inter_frame: [100, 1, 100, 1000]
+    lambda_arap_reg_key_frame: [100, 1, 10, 1000]
+    lambda_arap_reg_inter_frame: [100, 1, 10, 1000]
     lambda_ref_xyz: 0
     # tv losses
     lambda_rgb_tv: 1.
