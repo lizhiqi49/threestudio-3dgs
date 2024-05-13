@@ -537,82 +537,92 @@ class SuGaR4DGen(BaseLift3DSystem):
                 step=self.true_global_step,
             )
 
-        if self.stage != "static" and not batch.__contains__("timestamp"):
+        timestamps = batch["timestamps"][0]
+        frame_indices = batch["frame_indices"][0]
+        video_length = batch["video_length"][0]
+        azimuth = int(batch['azimuth'][0].item())
+        for i in range(video_length):
             batch.update(
                 {
-                    "timestamp": torch.as_tensor(
-                        [(batch["index"] + 1) / (batch["n_all_views"] + 1)], device=self.device
-                    ),
-                    "frame_indices": (
-                        torch.as_tensor([batch_idx], device=self.device)
-                        if self.geometry.num_frames > 1 else
-                        torch.as_tensor([0], device=self.device)
-                    )
+                    "timestamp": timestamps[i:i+1],
+                    "frame_indices": frame_indices[i:i+1],
+                    "render_sparse_gs": False
                 }
             )
-        out = self(batch)
-        save_out_to_image_grid(f"it{self.true_global_step}-val/{batch['index'][0]}.png", out)
+            out = self(batch)
+            save_out_to_image_grid(f"it{self.true_global_step}-val/vid-azi{azimuth}/{i}.png", out)
 
-        if self.geometry.sparse_gs is not None:
-            batch.update({"render_sparse_gs": True})
-            out_sg = self.renderer.batch_forward(batch)
-            save_out_to_image_grid(f"it{self.true_global_step}-val/{batch['index'][0]}_sparse_gs.png", out_sg) 
-
-        if self.stage != "static" and self.geometry.num_frames > 1:
-            if batch["index"] == 0:
-                self.batch_ref_eval = batch
-
-            self.batch_ref_eval["timestamp"] = batch["timestamp"]
-            self.batch_ref_eval["render_sparse_gs"] = False
-            out_ref = self(self.batch_ref_eval)
-            save_out_to_image_grid(f"it{self.true_global_step}-val-ref/{batch['index'][0]}.png", out_ref)
             if self.geometry.sparse_gs is not None:
-                self.batch_ref_eval["render_sparse_gs"] = True
-                out_ref_sg = self.renderer.batch_forward(self.batch_ref_eval)
-                save_out_to_image_grid(f"it{self.true_global_step}-val-ref/{batch['index'][0]}_sparse_gs.png", out_ref_sg)
-
-    def on_validation_epoch_end(self):
-        filestem = f"it{self.true_global_step}-val"
+                batch.update({"render_sparse_gs": True})
+                out_sg = self.renderer.batch_forward(batch)
+                save_out_to_image_grid(
+                    f"it{self.true_global_step}-val/vid-azi{azimuth}-sparse-gs/{i}.png", out_sg
+                ) 
+        
+        filestem = f"it{self.true_global_step}-val/vid-azi{azimuth}"
         self.save_img_sequence(
             filestem,
             filestem,
             "(\d+)\.png",
             save_format="mp4",
-            fps=30,
-            name="validation_epoch_end",
-            step=self.true_global_step,
+            fps=10,
+            step=self.true_global_step
         )
+
         if self.geometry.sparse_gs is not None:
-            self.save_img_sequence(
-                filestem+"-sparse-gs",
-                filestem,
-                "(\d+)_sparse_gs\.png",
-                save_format="mp4",
-                fps=30,
-                name="validation_epoch_end_gs",
-                step=self.true_global_step,
-            )
-        if self.stage != "static":
-            filestem = f"it{self.true_global_step}-val-ref"
+            filestem = f"it{self.true_global_step}-val/vid-azi{azimuth}-sparse-gs"
             self.save_img_sequence(
                 filestem,
                 filestem,
                 "(\d+)\.png",
                 save_format="mp4",
-                fps=30,
-                name="validation_epoch_end-ref",
-                step=self.true_global_step,
+                fps=10,
+                step=self.true_global_step
             )
-            if self.geometry.sparse_gs is not None:
-                self.save_img_sequence(
-                    filestem+"-sparse-gs",
-                    filestem,
-                    "(\d+)_sparse_gs\.png",
-                    save_format="mp4",
-                    fps=30,
-                    name="validation_epoch_end_sg-ref",
-                    step=self.true_global_step,
-                )
+
+    def on_validation_epoch_end(self):
+        pass
+        # filestem = f"it{self.true_global_step}-val"
+        # self.save_img_sequence(
+        #     filestem,
+        #     filestem,
+        #     "(\d+)\.png",
+        #     save_format="mp4",
+        #     fps=30,
+        #     name="validation_epoch_end",
+        #     step=self.true_global_step,
+        # )
+        # if self.geometry.sparse_gs is not None:
+        #     self.save_img_sequence(
+        #         filestem+"-sparse-gs",
+        #         filestem,
+        #         "(\d+)_sparse_gs\.png",
+        #         save_format="mp4",
+        #         fps=30,
+        #         name="validation_epoch_end_gs",
+        #         step=self.true_global_step,
+        #     )
+        # if self.stage != "static":
+        #     filestem = f"it{self.true_global_step}-val-ref"
+        #     self.save_img_sequence(
+        #         filestem,
+        #         filestem,
+        #         "(\d+)\.png",
+        #         save_format="mp4",
+        #         fps=30,
+        #         name="validation_epoch_end-ref",
+        #         step=self.true_global_step,
+        #     )
+        #     if self.geometry.sparse_gs is not None:
+        #         self.save_img_sequence(
+        #             filestem+"-sparse-gs",
+        #             filestem,
+        #             "(\d+)_sparse_gs\.png",
+        #             save_format="mp4",
+        #             fps=30,
+        #             name="validation_epoch_end_sg-ref",
+        #             step=self.true_global_step,
+        #         )
             
 
     def on_test_epoch_start(self) -> None:
@@ -621,94 +631,9 @@ class SuGaR4DGen(BaseLift3DSystem):
             self.geometry.spliner.update_end_time()
 
     def test_step(self, batch, batch_idx):
-        if self.stage != "static" and not batch.__contains__("timestamp"):
-            batch.update(
-                {
-                    "timestamp": torch.as_tensor(
-                        [(batch["index"] + 1) / (batch["n_all_views"] + 1)], device=self.device
-                    ),
-                    "frame_indices": (
-                        torch.as_tensor([batch_idx], device=self.device)
-                        if self.geometry.num_frames > 1 else
-                        torch.as_tensor([0], device=self.device)
-                    )
-                }
-            )
-        out = self(batch)
-        self.save_image_grid(
-            f"it{self.true_global_step}-test/{batch['index'][0]}.png",
-            (
-                [
-                    {
-                        "type": "rgb",
-                        "img": batch["rgb"][0],
-                        "kwargs": {"data_format": "HWC"},
-                    }
-                ]
-                if "rgb" in batch
-                else []
-            )
-            + [
-                {
-                    "type": "rgb",
-                    "img": out["comp_rgb"][0],
-                    "kwargs": {"data_format": "HWC"},
-                },
-            ]
-            + (
-                [
-                    {
-                        "type": "rgb",
-                        "img": out["comp_normal"][0],
-                        "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
-                    }
-                ]
-                if "comp_normal" in out
-                else []
-            )
-            + (
-                [
-                    {
-                        "type": "grayscale",
-                        "img": batch["depth"][0],
-                        "kwargs": {},
-                    }
-                ]
-                if "depth" in batch
-                else []
-            )
-            + (
-                [
-                    {
-                        "type": "grayscale",
-                        "img": out["comp_depth"][0],
-                        "kwargs": {},
-                    }
-                ]
-                if "comp_depth" in out
-                else []
-            )
-            ,
-            name="test_step",
-            step=self.true_global_step,
-        )
-        if self.stage != "static":
-            if batch["index"] == 0:
-                self.batch_ref_eval = batch
-
-            self.batch_ref_eval["timestamp"] = batch["timestamp"]
-            out_ref = self(self.batch_ref_eval)
-
-            # debug
-            # depth = out_ref["comp_depth"][0]
-            # depth_array = self.convert_data(depth.reshape(*depth.shape[:2]))
-            # depth_array = (depth_array - depth_array.min()) / (depth_array.max() - depth_array.min())
-            # depth_array = (depth_array * 255.0).astype(np.uint8)
-            # pil_img = Image.fromarray(depth_array, mode='L')
-            # pil_img.show()
-
+        def save_out_to_image_grid(filename, out):
             self.save_image_grid(
-                f"it{self.true_global_step}-test-ref/{batch['index'][0]}.png",
+                filename,
                 (
                     [
                         {
@@ -723,7 +648,7 @@ class SuGaR4DGen(BaseLift3DSystem):
                 + [
                     {
                         "type": "rgb",
-                        "img": out_ref["comp_rgb"][0],
+                        "img": out["comp_rgb"][0],
                         "kwargs": {"data_format": "HWC"},
                     },
                 ]
@@ -731,59 +656,94 @@ class SuGaR4DGen(BaseLift3DSystem):
                     [
                         {
                             "type": "rgb",
-                            "img": out_ref["comp_normal"][0],
+                            "img": out["comp_normal"][0],
                             "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
                         }
                     ]
-                    if "comp_normal" in out_ref
+                    if "comp_normal" in out
                     else []
                 )
                 + (
                     [
                         {
-                            "type": "grayscale",
-                            "img": batch["depth"][0],
-                            "kwargs": {},
+                            "type": "rgb",
+                            "img": out["comp_normal_from_dist"][0],
+                            "kwargs": {"data_format": "HWC", "data_range": (0, 1)},
                         }
                     ]
-                    if "depth" in batch
-                    else []
-                )
-                + (
-                    [
-                        {
-                            "type": "grayscale",
-                            "img": out_ref["comp_depth"][0],
-                            "kwargs": {},
-                        }
-                    ]
-                    if "comp_depth" in out_ref
+                    if "comp_normal_from_dist" in out
                     else []
                 )
                 ,
-                name=f"test-step-ref",
+                # claforte: TODO: don't hardcode the frame numbers to record... read them from cfg instead.
+                name=None,
                 step=self.true_global_step,
             )
 
-    def on_test_epoch_end(self):
+        timestamps = batch["timestamps"][0]
+        frame_indices = batch["frame_indices"][0]
+        video_length = batch["video_length"][0]
+        azimuth = int(batch['azimuth'][0].item())
+        for i in range(video_length):
+            batch.update(
+                {
+                    "timestamp": timestamps[i:i+1],
+                    "frame_indices": frame_indices[i:i+1],
+                    "render_sparse_gs": False
+                }
+            )
+            out = self(batch)
+            save_out_to_image_grid(f"it{self.true_global_step}-test/vid-azi{azimuth}/{i}.png", out)
+
+            if self.geometry.sparse_gs is not None:
+                batch.update({"render_sparse_gs": True})
+                out_sg = self.renderer.batch_forward(batch)
+                save_out_to_image_grid(
+                    f"it{self.true_global_step}-test/vid-azi{azimuth}-sparse-gs/{i}.png", out_sg
+                ) 
+        
+        filestem = f"it{self.true_global_step}-test/vid-azi{azimuth}"
         self.save_img_sequence(
-            f"it{self.true_global_step}-test",
-            f"it{self.true_global_step}-test",
+            filestem,
+            filestem,
             "(\d+)\.png",
             save_format="mp4",
-            fps=30,
-            name="test",
-            step=self.true_global_step,
+            fps=10,
+            step=self.true_global_step
         )
-        if self.stage != "static":
+
+        if self.geometry.sparse_gs is not None:
+            filestem = f"it{self.true_global_step}-test/vid-azi{azimuth}-sparse-gs"
             self.save_img_sequence(
-                f"it{self.true_global_step}-test-ref",
-                f"it{self.true_global_step}-test-ref",
+                filestem,
+                filestem,
                 "(\d+)\.png",
                 save_format="mp4",
-                fps=30,
-                name="test-ref",
-                step=self.true_global_step,
+                fps=10,
+                step=self.true_global_step
             )
-        # plysavepath = os.path.join(self.get_save_dir(), f"point_cloud_it{self.true_global_step}.ply")
-        # self.geometry.save_ply(plysavepath)
+
+
+    def on_test_epoch_end(self):
+        pass
+        # self.save_img_sequence(
+        #     f"it{self.true_global_step}-test",
+        #     f"it{self.true_global_step}-test",
+        #     "(\d+)\.png",
+        #     save_format="mp4",
+        #     fps=30,
+        #     name="test",
+        #     step=self.true_global_step,
+        # )
+        # if self.stage != "static":
+        #     self.save_img_sequence(
+        #         f"it{self.true_global_step}-test-ref",
+        #         f"it{self.true_global_step}-test-ref",
+        #         "(\d+)\.png",
+        #         save_format="mp4",
+        #         fps=30,
+        #         name="test-ref",
+        #         step=self.true_global_step,
+        #     )
+        # # plysavepath = os.path.join(self.get_save_dir(), f"point_cloud_it{self.true_global_step}.ply")
+        # # self.geometry.save_ply(plysavepath)

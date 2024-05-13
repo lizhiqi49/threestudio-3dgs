@@ -41,8 +41,8 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
     eval_fovy_deg: ${data.default_fovy_deg}
     light_sample_strategy: "dreamfusion"
     batch_uniform_azimuth: False
-    n_val_views: 32
-    n_test_views: 120
+    n_val_views: 5
+    n_test_views: 5
     rays_d_normalize: False
 
 system_type: "sugar-4dgen-system"
@@ -204,7 +204,7 @@ system:
         lr: 0.001
 
 trainer:
-  max_steps: 5000
+  max_steps: 5200
   log_every_n_steps: 1
   num_sanity_val_steps: 0
   val_check_interval: 100

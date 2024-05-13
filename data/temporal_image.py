@@ -345,6 +345,141 @@ class TemporalRandomImageIterableDataset(IterableDataset, Updateable):
             yield {}
 
 
+class TemporalRandomCameraDataset(Dataset):
+    def __init__(self, cfg: Any, split: str) -> None:
+        super().__init__()
+        self.cfg: TemporalRandomImageDataModuleConfig = cfg
+        self.split = split
+
+        self.video_length = self.cfg.video_length
+
+        self.frame_indices = torch.arange(self.video_length, dtype=torch.long)
+        self.timestamps = torch.as_tensor(
+            np.linspace(0, 1, self.video_length+2, endpoint=True), dtype=torch.float32
+        )[1:-1]
+
+        if split == "val":
+            self.n_views = self.cfg.n_val_views
+        else:
+            self.n_views = self.cfg.n_test_views
+
+        azimuth_deg: Float[Tensor, "B"]
+        if self.split == "val":
+            # make sure the first and last view are not the same
+            azimuth_deg = torch.linspace(0, 360.0, self.n_views + 1)[: self.n_views]
+        else:
+            azimuth_deg = torch.linspace(0, 360.0, self.n_views)
+        elevation_deg: Float[Tensor, "B"] = torch.full_like(
+            azimuth_deg, self.cfg.eval_elevation_deg
+        )
+        camera_distances: Float[Tensor, "B"] = torch.full_like(
+            elevation_deg, self.cfg.eval_camera_distance
+        )
+
+        elevation = elevation_deg * math.pi / 180
+        azimuth = azimuth_deg * math.pi / 180
+
+        # convert spherical coordinates to cartesian coordinates
+        # right hand coordinate system, x back, y right, z up
+        # elevation in (-90, 90), azimuth from +x to +y in (-180, 180)
+        camera_positions: Float[Tensor, "B 3"] = torch.stack(
+            [
+                camera_distances * torch.cos(elevation) * torch.cos(azimuth),
+                camera_distances * torch.cos(elevation) * torch.sin(azimuth),
+                camera_distances * torch.sin(elevation),
+            ],
+            dim=-1,
+        )
+
+        # default scene center at origin
+        center: Float[Tensor, "B 3"] = torch.zeros_like(camera_positions)
+        # default camera up direction as +z
+        up: Float[Tensor, "B 3"] = torch.as_tensor([0, 0, 1], dtype=torch.float32)[
+            None, :
+        ].repeat(self.cfg.eval_batch_size, 1)
+
+        fovy_deg: Float[Tensor, "B"] = torch.full_like(
+            elevation_deg, self.cfg.eval_fovy_deg
+        )
+        fovy = fovy_deg * math.pi / 180
+        light_positions: Float[Tensor, "B 3"] = camera_positions
+
+        lookat: Float[Tensor, "B 3"] = F.normalize(center - camera_positions, dim=-1)
+        right: Float[Tensor, "B 3"] = F.normalize(torch.cross(lookat, up), dim=-1)
+        up = F.normalize(torch.cross(right, lookat), dim=-1)
+        c2w3x4: Float[Tensor, "B 3 4"] = torch.cat(
+            [torch.stack([right, up, -lookat], dim=-1), camera_positions[:, :, None]],
+            dim=-1,
+        )
+        c2w: Float[Tensor, "B 4 4"] = torch.cat(
+            [c2w3x4, torch.zeros_like(c2w3x4[:, :1])], dim=1
+        )
+        c2w[:, 3, 3] = 1.0
+        
+        # get directions by dividing directions_unit_focal by focal length
+        focal_length: Float[Tensor, "B"] = (
+            0.5 * self.cfg.eval_height / torch.tan(0.5 * fovy)
+        )
+        directions_unit_focal = get_ray_directions(
+            H=self.cfg.eval_height, W=self.cfg.eval_width, focal=1.0
+        )
+        directions: Float[Tensor, "B H W 3"] = directions_unit_focal[
+            None, :, :, :
+        ].repeat(self.n_views, 1, 1, 1)
+        directions[:, :, :, :2] = (
+            directions[:, :, :, :2] / focal_length[:, None, None, None]
+        )
+
+        rays_o, rays_d = get_rays(
+            directions, c2w, keepdim=True, normalize=self.cfg.rays_d_normalize
+        )
+        proj_mtx: Float[Tensor, "B 4 4"] = get_projection_matrix(
+            fovy, self.cfg.eval_width / self.cfg.eval_height, 0.1, 1000.0
+        )  # FIXME: hard-coded near and far
+        mvp_mtx: Float[Tensor, "B 4 4"] = get_mvp_matrix(c2w, proj_mtx)
+
+        self.rays_o, self.rays_d = rays_o, rays_d
+        self.mvp_mtx = mvp_mtx
+        self.c2w = c2w
+        self.camera_positions = camera_positions
+        self.light_positions = light_positions
+        self.elevation, self.azimuth = elevation, azimuth
+        self.elevation_deg, self.azimuth_deg = elevation_deg, azimuth_deg
+        self.camera_distances = camera_distances
+        self.fovy = fovy
+
+    def __len__(self):
+        return self.n_views
+
+    def __getitem__(self, index):
+        return {
+            "index": index,
+            "rays_o": self.rays_o[index],
+            "rays_d": self.rays_d[index],
+            "mvp_mtx": self.mvp_mtx[index],
+            "c2w": self.c2w[index],
+            "camera_positions": self.camera_positions[index],
+            "light_positions": self.light_positions[index],
+            "elevation": self.elevation_deg[index],
+            "azimuth": self.azimuth_deg[index],
+            "camera_distances": self.camera_distances[index],
+            "height": self.cfg.eval_height,
+            "width": self.cfg.eval_width,
+            "fovy": self.fovy[index],
+            # "proj_mtx": self.proj_mtx[index],
+            "n_all_views": self.n_views,
+            "timestamps": self.timestamps,
+            "frame_indices": self.frame_indices,
+            "video_length": self.video_length
+        }
+
+    def collate(self, batch):
+        batch = torch.utils.data.default_collate(batch)
+        batch.update({"height": self.cfg.eval_height, "width": self.cfg.eval_width})
+        return batch
+    
+
+
 @register("temporal-image-datamodule")
 class TemporalRandomImageDataModule(pl.LightningDataModule):
     cfg: TemporalRandomImageDataModuleConfig
@@ -357,9 +492,13 @@ class TemporalRandomImageDataModule(pl.LightningDataModule):
         if stage in [None, "fit"]:
             self.train_dataset = TemporalRandomImageIterableDataset(self.cfg, "train")
         if stage in [None, "fit", "validate"]:
-            self.val_dataset = RandomCameraDataset(self.cfg.get("random_camera", {}), "val")
+            val_config = self.cfg.get("random_camera", {})
+            val_config.update({"video_length": self.cfg.video_length,})
+            self.val_dataset = TemporalRandomCameraDataset(val_config, "val")
         if stage in [None, "test"]:
-            self.test_dataset = RandomCameraDataset(self.cfg.get("random_camera", {}), "test")
+            val_config = self.cfg.get("random_camera", {})
+            val_config.update({"video_length": self.cfg.video_length,})
+            self.test_dataset = TemporalRandomCameraDataset(val_config, "test")
         if stage in [None, "predict"]:
             cfg = self.cfg.get("random_camera")
             cfg.update(
