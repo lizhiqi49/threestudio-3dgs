@@ -20,20 +20,25 @@ from threestudio.utils.misc import C
 from torch.cuda.amp import autocast
 from torchmetrics import PearsonCorrCoef
 
+from pytorch3d.renderer import TexturesUV
+from pytorch3d.structures import Meshes
+from pytorch3d.io import save_obj
 from pytorch3d.loss import mesh_normal_consistency, mesh_laplacian_smoothing
+import open3d as o3d
 
 from ..geometry.gaussian_base import BasicPointCloud, Camera
 from ..geometry.dynamic_sugar import DynamicSuGaRModel
 from ..utils.arap_utils import ARAPCoach
+from .base import BaseSuGaRSystem
 
 from torchmetrics import PeakSignalNoiseRatio
 import torchvision
 
 
 @threestudio.register("sugar-4dgen-system")
-class SuGaR4DGen(BaseLift3DSystem):
+class SuGaR4DGen(BaseSuGaRSystem):
     @dataclass
-    class Config(BaseLift3DSystem.Config):
+    class Config(BaseSuGaRSystem.Config):
         stage: str = "static"  # ["static", "motion", "refine"]
 
         # guidances
@@ -101,7 +106,7 @@ class SuGaR4DGen(BaseLift3DSystem):
     #     # return
     #     super().on_load_checkpoint(checkpoint)
 
-    def forward(self, batch: Dict[str, Any]) -> Dict[str, Any]:
+    def forward(self, batch: Dict[str, Any], **kwargs) -> Dict[str, Any]:
         self.geometry.update_learning_rate(self.global_step)
         outputs = self.renderer.batch_forward(batch)
         return outputs
@@ -747,3 +752,49 @@ class SuGaR4DGen(BaseLift3DSystem):
         #     )
         # # plysavepath = os.path.join(self.get_save_dir(), f"point_cloud_it{self.true_global_step}.ply")
         # # self.geometry.save_ply(plysavepath)
+
+
+    def on_predict_epoch_end(self) -> None:
+        self.texture_img = self.texture_img / self.texture_counter.clamp(min=1)
+
+        video_length = 32
+        timestamps = torch.as_tensor(
+            np.linspace(0, 1, video_length+2, endpoint=True), dtype=torch.float32
+        )[1:-1].to(self.device)
+
+        textures_uv = TexturesUV(
+            maps=self.texture_img[None],
+            verts_uvs=self.verts_uv[None],
+            faces_uvs=self.faces_uv[None],
+            sampling_mode='nearest',
+        )
+
+        mesh_save_dir = os.path.join(self.get_save_dir(), f"extracted_textured_meshes")
+        os.makedirs(mesh_save_dir, exist_ok=True)
+        for i, t in enumerate(timestamps):
+
+            timed_surface_mesh = self.geometry.get_timed_surface_mesh(timestamps[i:i+1])
+            verts = timed_surface_mesh.verts_list()[0]
+            faces = timed_surface_mesh.faces_list()[0]
+            textured_mesh = Meshes(
+                verts=[verts],
+                faces=[faces],
+                textures=textures_uv
+            )
+            
+            # threestudio.info("Texture extracted.")        
+            # threestudio.info("Saving textured mesh...")
+            
+            mesh_save_path = os.path.join(
+                mesh_save_dir, f"extracted_mesh_{i}.obj"
+            )
+            with torch.no_grad():
+                save_obj(  
+                    mesh_save_path,
+                    verts=textured_mesh.verts_list()[0],
+                    faces=textured_mesh.faces_list()[0],
+                    verts_uvs=textured_mesh.textures.verts_uvs_list()[0],
+                    faces_uvs=textured_mesh.textures.faces_uvs_list()[0],
+                    texture_map=textured_mesh.textures.maps_padded()[0].clamp(0., 1.),
+                )
+            threestudio.info(f"Textured mesh saved to {mesh_save_path}")

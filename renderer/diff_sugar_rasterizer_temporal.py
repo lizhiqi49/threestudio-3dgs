@@ -148,14 +148,26 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         # means3D = pc.get_xyz
         means2D = screenspace_points
 
-        if render_sparse_gs:
-            means3D, scales, rotations, opacity = pc.get_timed_sparse_gs_all_single_time(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
-            shs = pc.sparse_gs.get_features
+        static = False
+        if viewpoint_camera.timestamp is None and viewpoint_camera.frame_idx is None:
+            static = True
+            render_sparse_gs = False
+
+            means3D = pc.get_xyz
+            opacity = pc.get_opacity
+            scales = pc.get_scaling
+            rotations = pc.get_rotation
+            shs = pc.get_features
             colors_precomp = None
         else:
-        # means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_all(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
-            means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_gs_all_single_time(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
-            shs = None
+            if render_sparse_gs:
+                means3D, scales, rotations, opacity = pc.get_timed_sparse_gs_all_single_time(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
+                shs = pc.sparse_gs.get_features
+                colors_precomp = None
+            else:
+            # means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_all(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
+                means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_gs_all_single_time(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
+                shs = None
 
         cov3D_precomp = None
 
@@ -174,7 +186,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         mask = rendered_alpha > 0.99
         rendered_depth[~mask] = rendered_depth[~mask].detach()
 
-        if compute_normal_from_dist:
+        if compute_normal_from_dist and not static:
             batch_idx = kwargs["batch_idx"]
             rays_d = kwargs["rays_d"][batch_idx]
             rays_o = kwargs["rays_o"][batch_idx]
@@ -189,7 +201,7 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             normal_from_dist = None
             normal_map_from_dist = None
 
-        if not render_sparse_gs:
+        if not render_sparse_gs and not static:
             point_normals = pc.get_timed_gs_normals(
                 viewpoint_camera.timestamp[None], viewpoint_camera.frame_idx[None]
             )[0]

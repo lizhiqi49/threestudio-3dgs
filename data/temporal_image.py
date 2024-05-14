@@ -34,6 +34,7 @@ from .uncond import (
     RandomCameraDataModuleConfig,
     RandomCameraDataset,
     RandomCameraIterableDataset,
+    RandomCameraArbiraryDataset,
 )
 
 @dataclass
@@ -500,15 +501,26 @@ class TemporalRandomImageDataModule(pl.LightningDataModule):
             val_config.update({"video_length": self.cfg.video_length,})
             self.test_dataset = TemporalRandomCameraDataset(val_config, "test")
         if stage in [None, "predict"]:
-            cfg = self.cfg.get("random_camera")
+            cfg = self.cfg.get("random_camera", {})
+            # cfg.update(
+            #     {
+            #         "batch_size": 1,
+            #         "height": 512,
+            #         "width": 512,
+            #     }
+            # )
+            # self.predict_dataset = RandomCameraIterableDataset(cfg)
             cfg.update(
                 {
-                    "batch_size": 1,
-                    "height": 512,
-                    "width": 512,
+                    "predict_height": 1024,
+                    "predict_width": 1024,
+                    "predict_azimuth_range": (-180, 180),
+                    "predict_elevation_range": (-10, 80),
+                    "predict_camera_distance_range": (3.8, 3.8),
+                    "n_predict_views": 120,
                 }
             )
-            self.predict_dataset = RandomCameraIterableDataset(cfg)
+            self.predict_dataset = RandomCameraArbiraryDataset(cfg, "predict")
 
     def prepare_data(self):
         pass
@@ -532,4 +544,4 @@ class TemporalRandomImageDataModule(pl.LightningDataModule):
         return self.general_loader(self.test_dataset, batch_size=1)
 
     def predict_dataloader(self) -> DataLoader:
-        return self.general_loader(self.test_dataset, batch_size=1)
+        return self.general_loader(self.predict_dataset, batch_size=1)

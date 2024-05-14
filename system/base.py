@@ -40,14 +40,14 @@ class BaseSuGaRSystem(BaseLift3DSystem):
         postprocess: bool = False
         postprocess_density_threshold: float = 0.1
         postprocess_iterations: int = 5
-        square_size_in_texture: int = 10
-        export_resolution: int = 512
+        square_size_in_texture: int = 20
+        export_resolution: int = 1024
         
     cfg: Config
     geometry: SuGaRModel
 
     @torch.no_grad()
-    def export_mesh_to_ply(self):
+    def export_mesh(self, format="obj"):
         mesh = o3d.geometry.TriangleMesh()
         mesh.vertices = o3d.utility.Vector3dVector(
             self.geometry.get_xyz_verts.detach().cpu().numpy()
@@ -61,7 +61,7 @@ class BaseSuGaRSystem(BaseLift3DSystem):
         mesh.compute_vertex_normals()
 
         mesh_save_path = os.path.join(
-            self.get_save_dir(), f"exported_mesh_step{self.global_step}.ply"
+            self.get_save_dir(), f"exported_mesh_step{self.global_step}.{format}"
         )
         o3d.io.write_triangle_mesh(
             mesh_save_path, mesh, write_triangle_uvs=True, write_vertex_colors=True, write_vertex_normals=True
@@ -262,8 +262,8 @@ class BaseSuGaRSystem(BaseLift3DSystem):
         T = Rt[:3, 3]
         R = Rt[:3, :3].transpose()
         fov = batch["fovy"].cpu().numpy()[0]
-        height = batch["height"]
-        width = batch["width"]
+        height = batch["height"].item()
+        width = batch["width"].item()
         gs_camera = GSCamera(
             R=R, T=T, FoVx=fov, FoVy=fov,
             image_height=height,
