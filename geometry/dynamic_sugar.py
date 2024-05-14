@@ -492,7 +492,7 @@ class DynamicSuGaRModel(SuGaRModel):
         )
         timed_attrs["scale"] = torch.cat(
             [attr_dict["scale"] for attr_dict in timed_attr_list], dim=0
-        ) if self.cfg.d_scale else None
+        ) if (self.cfg.d_scale or self.cfg.skinning_method=="hybrid") else None
         timed_attrs["opacity"] = torch.cat(
             [attr_dict["opacity"] for attr_dict in timed_attr_list], dim=0
         ) if self.cfg.skinning_method == "hybrid" else None
