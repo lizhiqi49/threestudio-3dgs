@@ -159,6 +159,10 @@ class SuGaR4DGen(BaseLift3DSystem):
         # ARAP
         self.arap_coach = None
 
+
+        # debug
+        self.geometry.save_path = self.get_save_dir()
+
     def training_substep(self, batch, batch_idx, guidance: str, render_sparse_gs: bool = False):
         """
         Args:
