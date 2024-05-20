@@ -363,8 +363,11 @@ class TemporalRandomCameraDataset(Dataset):
         if self.split == "val":
             # make sure the first and last view are not the same
             azimuth_deg = torch.linspace(0, 360.0, self.n_views + 1)[: self.n_views]
+            # azimuth_deg = torch.tensor([0., -75., 15., 105., 195.])
         else:
-            azimuth_deg = torch.linspace(0, 360.0, self.n_views)
+            # azimuth_deg = torch.linspace(0, 360.0, self.n_views)
+            azimuth_deg = torch.tensor([0., -75., 15., 105., 195.])
+
         elevation_deg: Float[Tensor, "B"] = torch.full_like(
             azimuth_deg, self.cfg.eval_elevation_deg
         )
@@ -411,7 +414,7 @@ class TemporalRandomCameraDataset(Dataset):
             [c2w3x4, torch.zeros_like(c2w3x4[:, :1])], dim=1
         )
         c2w[:, 3, 3] = 1.0
-        
+
         # get directions by dividing directions_unit_focal by focal length
         focal_length: Float[Tensor, "B"] = (
             0.5 * self.cfg.eval_height / torch.tan(0.5 * fovy)
@@ -473,7 +476,7 @@ class TemporalRandomCameraDataset(Dataset):
         batch = torch.utils.data.default_collate(batch)
         batch.update({"height": self.cfg.eval_height, "width": self.cfg.eval_width})
         return batch
-    
+
 
 
 @register("temporal-image-datamodule")

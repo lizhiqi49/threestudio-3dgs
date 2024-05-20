@@ -675,6 +675,9 @@ class DynamicSuGaRModel(SuGaRModel):
             vert_lbs_weight = (
                 self._xyz_neighbor_nodes_weights[None, ..., None] * neighbor_nodes_opacity
             ).sum(dim=-2)
+            # debug
+            vert_lbs_weight = torch.clamp(vert_lbs_weight + 0.4, max=1.0)
+
             deformed_vert_xyz = vert_lbs_weight * deformed_vert_xyz_lbs + (1 - vert_lbs_weight) * deformed_vert_xyz_dqs
 
             # debug
