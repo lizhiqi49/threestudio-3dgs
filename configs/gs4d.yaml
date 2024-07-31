@@ -1,16 +1,18 @@
-name: "gs4d-motion"
-tag: "${data.random_camera.height}_${rmspace:${basename:${data.video_frames_dir}},_}"
+name: "sugar4d-test"
+tag: "${data.random_camera.height}_${rmspace:${basename:${data.video_frames_dir}}_${system.geometry.dynamic_mode},_}"
 exp_root_dir: "outputs"
 seed: 0
 
 data_type: "temporal-image-datamodule"
 data: # threestudio/data/image.py -> SingleImageDataModuleConfig
-  video_frames_dir: ./load/videos/anya2
+  video_frames_dir: ./load/consistent4d_data/in-the-wild/dancing_robot
+  video_length: 32
   norm_timestamp: true
-  num_frames: 10
-  height: [256, 512]
-  width: [256, 512]
-  resolution_milestones: [300]
+  # num of frames a batch
+  num_frames: 8
+  height: 256
+  width: 256
+  resolution_milestones: [100]
   default_elevation_deg: 5.0
   default_azimuth_deg: 0.0
   default_camera_distance: 3.8
@@ -18,8 +20,8 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
   requires_depth: ${cmaxgt0orcmaxgt0:${system.loss.lambda_depth},${system.loss.lambda_depth_rel}}
   requires_normal: ${cmaxgt0:${system.loss.lambda_normal}}
   random_camera: # threestudio/data/uncond.py -> RandomCameraDataModuleConfig
-    height: 256
-    width: 256
+    height: 512
+    width: 512
     batch_size: 2
     eval_height: 512
     eval_width: 512
@@ -39,45 +41,32 @@ data: # threestudio/data/image.py -> SingleImageDataModuleConfig
     eval_fovy_deg: ${data.default_fovy_deg}
     light_sample_strategy: "dreamfusion"
     batch_uniform_azimuth: False
-    n_val_views: 30
-    n_test_views: 120
+    n_val_views: 5
+    n_test_views: 5
+    rays_d_normalize: False
 
-system_type: "gaussian-splatting-4dgen-system"
+system_type: "gaussian-4dgen-system"
 system:
   stage: motion
 
-  geometry_type: "spacetime-gaussian-splatting"
+  geometry_type: "dynamic-gaussian"
   geometry:
-    position_lr: 0.001
-    scale_lr: 0.001
+    position_lr: [0, 0.001, 0.00002, 1000]
+    scale_lr: [0, 0.01, 0.001, 1000]
     feature_lr: 0.01
     opacity_lr: 0.05
     rotation_lr: 0.001
-    densification_interval: 1000
-    prune_interval: 1000
+    densification_interval: 100
+    prune_interval: 100
     opacity_reset_interval: 100000
-    densify_from_iter: ${trainer.max_steps}
+    densify_from_iter: 0
     densify_until_iter: ${trainer.max_steps}
-    prune_from_iter: ${trainer.max_steps}
+    prune_from_iter: 0
     prune_until_iter: ${trainer.max_steps}
     densify_grad_threshold: 0.01
     min_opac_prune: 0.005
     split_thresh: 0.02
     radii2d_thresh: 1000
-
-    enable_spacetime: true
-    omega_lr: 0.0001
-    trbfc_lr: 0.0001
-    trbfs_lr: 0.03
-    move_lr: 3.5
-
-    rank_motion: 3
-    rank_omega: 1
-    
-    addsphpointsscale: 0.8
-    trbfslinit: 0.0
-    raystart: 0.7
-    spatial_lr_scale: 1
 
     sphere: False
 
@@ -85,14 +74,24 @@ system:
     pc_init_radius: 0.5
     opacity_init: 0.05
     max_num: 500000
+    
+    n_dg_nodes: 512
+    dg_node_connectivity: 4
 
-    enable_deformation: false
-    deformation_lr: 0.00064
-    grid_lr: 0.0064
+    deformation_lr: 0.00032 # [0, 0.001, 0.0001, 4000] # 0.00064
+    grid_lr: 0.00032 # [0, 0.001, 0.0001, 4000] # 0.0064
+
+    # dynamic attr
+    d_scale: true
+
+    skinning_method: "hybrid"
+
+    geometry_convert_from: ""
+
 
   exporter_type: "gaussian-mesh-exporter"
 
-  renderer_type: "diff-gaussian-rasterizer-spacetime"
+  renderer_type: "diff-gaussian-rasterizer-temporal"
   renderer:
     debug: false
     invert_bg_prob: 1.0
@@ -110,7 +109,7 @@ system:
 
   guidance_zero123_type: "temporal-stable-zero123-guidance"
   guidance_zero123:
-    num_frames: ${data.num_frames}
+    num_frames: ${data.video_length}
     pretrained_config: "./load/zero123/sd-objaverse-finetune-c_concat-256.yaml"
     pretrained_model_name_or_path: "/home/lzq/workspace/huggingface_models/zero123/stable_zero123.ckpt"
     vram_O: ${not:${gt0:${system.freq.guidance_eval}}}
@@ -119,9 +118,27 @@ system:
     cond_azimuth_deg: ${data.default_azimuth_deg}
     cond_camera_distance: ${data.default_camera_distance}
     guidance_scale: 3.0
-    min_step_percent: 0.1  # (start_iter, start_val, end_val, end_iter)
-    max_step_percent: 0.6
+    min_step_percent: 0.02  # (start_iter, start_val, end_val, end_iter)
+    max_step_percent: 0.5
     chunk_size: null
+
+  prompt_processor_2d_type: "stable-diffusion-prompt-processor"
+  prompt_processor_2d:
+    pretrained_model_name_or_path: "/home/lzq/workspace/huggingface_models/stabilityai--stable-diffusion-2-1-base"
+    prompt: "an image of anya girl dancing"
+    negative_prompt: "ugly, bad anatomy, blurry, pixelated obscure, unnatural colors, poor lighting, dull, and unclear, cropped, lowres, low quality, artifacts, duplicate, morbid, mutilated, poorly drawn face, deformed, dehydrated, bad proportions"
+    front_threshold: 30.
+    back_threshold: 30.
+
+  guidance_2d_type: null
+  guidance_2d:
+    pretrained_model_name_or_path: "/home/lzq/workspace/huggingface_models/stabilityai--stable-diffusion-2-1-base"
+    pretrained_adapter_name_or_path: /home/lzq/workspace/CVGL-4DGen-Project/outputs/anya_lora
+    guidance_scale: 20.
+    weighting_strategy: sds
+    min_step_percent: 0.1
+    max_step_percent: 0.6
+    use_img_loss: true
 
   prompt_processor_3d_type: null
   guidance_3d_type: null
@@ -129,6 +146,7 @@ system:
   freq:
     ref_only_steps: 0
     guidance_eval: 0
+    milestone_arap_reg: ${trainer.max_steps}
 
   loggers:
     wandb:
@@ -137,15 +155,36 @@ system:
       name: None
 
   loss:
-    lambda_sds: 0.1
+    lambda_sds_zero123: 1
+    lambda_sds_2d: 0
+    lambda_sds_2d_img: 0.0001
     lambda_sds_vid: 0
-    lambda_rgb: 10000
-    lambda_mask: 1000.
-    lambda_depth: 0. # 0.05
-    lambda_depth_rel: 0. # [0, 0, 0.05, 100]
-    lambda_normal: 0. # [0, 0, 0.05, 100]
+    lambda_rgb: 5000
+    lambda_mask: 5000
+    lambda_depth: 0 # 0.05
+    lambda_depth_rel: 0 # 0.1
+    lambda_normal: 0 # [0, 0, 0.05, 100]
     lambda_normal_smooth: 0.
+    lambda_normal_consistency: 100. # 10.
+    lambda_normal_depth_consistency: 10.
+    lambda_laplacian_smoothing: 0.
     lambda_3d_normal_smooth: 0.
+    lambda_arap_reg_key_frame: [100, 1, 10, 1000]
+    lambda_arap_reg_inter_frame: [100, 1, 10, 1000]
+    lambda_ref_xyz: 0
+    # tv losses
+    lambda_rgb_tv: 1.
+    lambda_depth_tv: 10.
+    lambda_normal_tv: 10. # 1.
+    # object centric reg
+    lambda_obj_centric: 1.
+
+    # # sparse gaussians
+    # lambda_rgb_sg: 5000
+    # lambda_mask_sg: 5000
+    # lambda_depth_rel_sg: 0.1
+    # lambda_sds_zero123_sg: 1
+
 
   optimizer:
     name: Adam
@@ -156,7 +195,6 @@ system:
     params:
       background:
         lr: 0.001
-
 
 trainer:
   max_steps: 5000
@@ -169,4 +207,4 @@ trainer:
 checkpoint:
   save_last: true # save at each validation time
   save_top_k: -1
-  every_n_train_steps: 1000 # ${trainer.max_steps}
+  every_n_train_steps: ${trainer.max_steps}

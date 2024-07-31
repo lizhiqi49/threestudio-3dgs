@@ -187,3 +187,86 @@ class ARAPCoach:
         energy = (w * stretch_norm).sum()
 
         return energy
+
+
+class KNNARAPCoach:
+
+    def __init__(
+        self,
+        xyz: Float[Tensor, "N_pts 3"],
+        nn_indices: Int[Tensor, "N_pts K"],
+        device: torch.device,
+        nn_dists: Float[Tensor, "N_pts K"] = None,
+        nn_weights: Float[Tensor, "N_pts K"] = None,
+    ):
+        self.xyz = xyz
+        self.nn_indices = nn_indices
+        self.device = device
+
+        self.n_points, self.n_neighbors = nn_indices.shape
+        if not nn_weights:
+            if not nn_dists:
+                nn_dists = compute_nn_distances(xyz, nn_indices)
+            nn_weights = compute_nn_weights(nn_dists)
+        self.nn_weights = nn_weights    # softmax of negative squared distance
+
+    def compute_arap_energy(
+        self,
+        xyz_prime: Float[Tensor, "N_pts 3"],
+        nn_weights: Float[Tensor, "N_pts k"] = None,
+    ) -> Float:
+        n_pts = self.n_points
+        n_neighbors = self.n_neighbors
+
+        if not nn_weights:
+            w = nn_weights
+        else:
+            w = self.nn_weights
+
+        edge_mtx: Float[Tensor, "N_pts k 3"] = (
+            self.xyz.unsqueeze(1).repeat(1, n_neighbors, 1)
+            - self.xyz[self.nn_indices.flatten()].reshape(n_pts, n_neighbors, 3)
+        )
+        edge_mtx_prime = (
+            xyz_prime.unsqueeze(1).repeat(1, n_neighbors, 1)
+            - self.xyz[self.nn_indices.flatten()].reshape(n_pts, n_neighbors, 3)
+        )
+
+        # Calculate covariance matrix in bulk
+        D = torch.diag_embed(w, dim1=1, dim2=2)
+        S = torch.bmm(edge_mtx.permute(0, 2, 1), torch.bmm(D, edge_mtx_prime))
+
+        # Calculate rotations
+        U, sig, W = batch_svd(S)
+        R = torch.bmm(W, U.permute(0, 2, 1))
+
+        # Need to flip the column of U corresponding to smallest singular value
+        # for any det(Ri) <= 0
+        entries_to_flip = torch.nonzero(torch.det(R) <= 0, as_tuple=False).flatten()  # idxs where det(R) <= 0
+        if len(entries_to_flip) > 0:
+            Umod = U.clone()
+            cols_to_flip = torch.argmin(sig[entries_to_flip], dim=1)  # Get minimum singular value for each entry
+            Umod[entries_to_flip, :, cols_to_flip] *= -1  # flip cols
+            R[entries_to_flip] = torch.bmm(W[entries_to_flip], Umod[entries_to_flip].permute(0, 2, 1))
+
+        # Compute energy
+        rot_rigid = torch.bmm(R, edge_mtx.permute(0, 2, 1)).permute(0, 2, 1)
+        stretch_vec = edge_mtx_prime - rot_rigid
+        stretch_norm = torch.norm(stretch_vec, dim=2) ** 2
+        energy = (w * stretch_norm).sum()
+
+        return energy
+    
+def compute_nn_weights(nn_dists: Float[Tensor, "*B N_pts k"]) -> Float[Tensor, "*B N_pts k"]:
+    return torch.nn.functional.softmax(nn_dists ** 2, dim=-1)
+
+
+def compute_nn_distances(
+    xyz: Float[Tensor, "N_pts 3"], nn_indices: Int[Tensor, "N_pts k"]
+) -> Float[Tensor, "N_pts k"]:
+
+    N, k = nn_indices.shape
+    xyz_nn = xyz[nn_indices.flatten()].reshape(N, k, 3)
+
+    dists = torch.norm(xyz[:, None, :] - xyz_nn, dim=-1)
+    return dists

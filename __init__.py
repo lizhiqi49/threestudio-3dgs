@@ -21,6 +21,7 @@ from .geometry import (
     spacetime_gaussian,
     sugar,
     dynamic_sugar,
+    dynamic_gaussian,
 )
 from .material import gaussian_material
 from .renderer import (
@@ -28,7 +29,7 @@ from .renderer import (
     diff_gaussian_rasterizer_advanced,
     diff_gaussian_rasterizer_background,
     diff_gaussian_rasterizer_shading,
-    diff_gaussian_rasterizer_st,
+    diff_gaussian_rasterizer_temporal,
     diff_gaussian_rasterizer_normal,
     diff_sugar_rasterizer_normal,
     diff_sugar_rasterizer_temporal,
@@ -37,7 +38,7 @@ from .system import (
     gaussian_mvdream,
     gaussian_splatting,
     gaussian_zero123,
-    # gaussian_4dgen,
+    gaussian_4dgen,
     # sugar_zero123,
     sugar_4dgen,
     # sugar_imagedream,
