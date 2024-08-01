@@ -1,5 +1,5 @@
-name: "sugar4d-test"
-tag: "${data.random_camera.height}_${rmspace:${basename:${data.video_frames_dir}}_${system.geometry.dynamic_mode},_}"
+name: "gaussian4d-test"
+tag: "${data.random_camera.height}_${rmspace:${basename:${data.video_frames_dir}},_}"
 exp_root_dir: "outputs"
 seed: 0
 
@@ -111,7 +111,7 @@ system:
   guidance_zero123:
     num_frames: ${data.video_length}
     pretrained_config: "./load/zero123/sd-objaverse-finetune-c_concat-256.yaml"
-    pretrained_model_name_or_path: "/home/lzq/workspace/huggingface_models/zero123/stable_zero123.ckpt"
+    pretrained_model_name_or_path: "/cym/model/zero123/stable_zero123.ckpt"
     vram_O: ${not:${gt0:${system.freq.guidance_eval}}}
     cond_video_dir: ${data.video_frames_dir}
     cond_elevation_deg: ${data.default_elevation_deg}
@@ -197,7 +197,7 @@ system:
         lr: 0.001
 
 trainer:
-  max_steps: 5000
+  max_steps: 3000
   log_every_n_steps: 1
   num_sanity_val_steps: 0
   val_check_interval: 100
