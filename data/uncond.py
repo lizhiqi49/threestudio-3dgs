@@ -57,11 +57,11 @@ class RandomCameraDataModuleConfig:
     light_sample_strategy: str = "dreamfusion"
     batch_uniform_azimuth: bool = True
     progressive_until: int = 0  # progressive ranges for elevation, azimuth, r, fovy
-    predict_height: int = 512
-    predict_width: int = 512
+    predict_height: int = 1024
+    predict_width: int = 1024
     predict_azimuth_range: Tuple[float, float] = (-180, 180)
     predict_elevation_range: Tuple[float, float] = (-10, 80)
-    predict_camera_distance_range: Tuple[float, float] = (1.5, 2.0)
+    predict_camera_distance_range: Tuple[float, float] = (3.8, 3.8)
 
     rays_d_normalize: bool = True
 

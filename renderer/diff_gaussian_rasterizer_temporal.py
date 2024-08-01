@@ -16,8 +16,7 @@ from threestudio.models.renderers.base import Rasterizer
 from threestudio.utils.typing import *
 
 from .gaussian_batch_renderer import GaussianBatchRenderer
-from ..geometry.spacetime_gaussian import SpacetimeGaussianModel
-from ..geometry.dynamic_sugar import DynamicSuGaRModel
+from ..geometry.dynamic_gaussian import DynamicGaussianModel
 
 
 def basicfunction(x):
@@ -54,7 +53,7 @@ class Depth2Normal(torch.nn.Module):
         normal = -torch.cross(delzdelx, delzdely, dim=1)
         return normal
 
-@threestudio.register("diff-sugar-rasterizer-temporal")
+@threestudio.register("diff-gaussian-rasterizer-temporal")
 class DiffGaussian(Rasterizer, GaussianBatchRenderer):
     @dataclass
     class Config(Rasterizer.Config):
@@ -97,16 +96,16 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
 
         if self.training:
             # debug
-            invert_bg_color = True
+            invert_bg_color = False
             # invert_bg_color = np.random.rand() > self.cfg.invert_bg_prob
         else:
             invert_bg_color = True
 
         bg_color = bg_color if not invert_bg_color else (1.0 - bg_color)
 
-        pc: DynamicSuGaRModel = self.geometry
+        pc: DynamicGaussianModel = self.geometry
         # Create zero tensor. We will use it to make pytorch return gradients of the 2D (screen-space) means
-        pts = pc.sparse_gs.get_xyz if render_sparse_gs else pc.get_xyz
+        pts = pc.get_xyz
         screenspace_points = (
             torch.zeros_like(
                 pts, dtype=pts.dtype, requires_grad=True, device="cuda"
@@ -160,14 +159,10 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             shs = pc.get_features
             colors_precomp = None
         else:
-            if render_sparse_gs:
-                means3D, scales, rotations, opacity = pc.get_timed_sparse_gs_all_single_time(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
-                shs = pc.sparse_gs.get_features
-                colors_precomp = None
-            else:
+
             # means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_all(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
-                means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_gs_all_single_time(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
-                shs = None
+            means3D, scales, rotations, opacity, colors_precomp = pc.get_timed_gs_all_single_time(viewpoint_camera.timestamp, viewpoint_camera.frame_idx)
+            shs = pc.get_features
 
         cov3D_precomp = None
 
@@ -201,31 +196,6 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
             normal_from_dist = None
             normal_map_from_dist = None
 
-        if not render_sparse_gs and not static:
-            point_normals = pc.get_timed_gs_normals(
-                viewpoint_camera.timestamp[None], viewpoint_camera.frame_idx[None]
-            )[0]
-            normal, _, _, _ = rasterizer(
-                means3D=means3D,
-                means2D=torch.zeros_like(means2D),
-                shs=None,
-                colors_precomp=point_normals,
-                opacities=opacity,
-                scales=scales,
-                rotations=rotations,
-                cov3D_precomp=cov3D_precomp,
-            )
-            normal = F.normalize(normal, dim=0)
-
-            # when using mesh extracted by sugar, the directions of faces' normal is inward-pointing
-            normal = - normal
-            normal_map = normal * 0.5 * rendered_alpha + 0.5
-            normal_mask = mask.repeat(3, 1, 1)
-            normal[~normal_mask] = normal[~normal_mask].detach()
-            normal_map[~normal_mask] = normal_map[~normal_mask].detach()
-        else:
-            normal = None
-            normal_map = None
 
         # Retain gradients of the 2D (screen-space) means for batch dim
         if self.training:
@@ -235,13 +205,11 @@ class DiffGaussian(Rasterizer, GaussianBatchRenderer):
         # They will be excluded from value updates used in the splitting criteria.
         return {
             "render": rendered_image.clamp(0, 1),
-            "normal": normal_map,
-            "normal_from_dist": normal_map_from_dist,
+            "normal": normal_map_from_dist,
             "depth": rendered_depth,
             "mask": rendered_alpha,
             "viewspace_points": screenspace_points,
             "visibility_filter": radii > 0,
             "radii": radii,
-            "raw_normal": normal,
-            "raw_normal_from_dist": normal_from_dist,
+            "raw_normal": normal_from_dist,
         }

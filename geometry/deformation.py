@@ -339,7 +339,7 @@ class Deformation(nn.Module):
         output_dim = self.W
         return \
             nn.Sequential(nn.ReLU(), nn.Linear(self.W, self.W), nn.ReLU(), nn.Linear(self.W, 3)), \
-                nn.Sequential(nn.ReLU(), nn.Linear(self.W, self.W), nn.ReLU(), nn.Linear(self.W, 3)), \
+                nn.Sequential(nn.ReLU(), nn.Linear(self.W, self.W), nn.ReLU(), nn.Linear(self.W, 6)), \
                 nn.Sequential(nn.ReLU(), nn.Linear(self.W, self.W), nn.ReLU(), nn.Linear(self.W, 4)), \
                 nn.Sequential(nn.ReLU(), nn.Linear(self.W, self.W), nn.ReLU(), nn.Linear(self.W, 1))
 
@@ -363,7 +363,7 @@ class Deformation(nn.Module):
         output_dim = self.W
         return \
             Head_Res_Net(self.W, 3), \
-                Head_Res_Net(self.W, 3), \
+                Head_Res_Net(self.W, 6), \
                 Head_Res_Net(self.W, 4), \
                 Head_Res_Net(self.W, 1)
 
